@@ -8,6 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@llm4ts/core':
+        specifier: 0.4.0
+        version: 0.4.0(effect@4.0.0-beta.102)
+      '@llm4ts/flow':
+        specifier: 0.4.0
+        version: 0.4.0(effect@4.0.0-beta.102)
+      '@llm4ts/runner':
+        specifier: 0.4.0
+        version: 0.4.0(effect@4.0.0-beta.102)
       effect:
         specifier: ^4.0.0-beta.102
         version: 4.0.0-beta.102
@@ -44,6 +53,24 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+
+  '@llm4ts/core@0.4.0':
+    resolution: {integrity: sha512-X3ztlr0unvHeM83NAU2d9IGJgTfwoOqyp4DGzQGICEkYPBs++q1lcSO1nBZQQPRadLY1eZTntF3Yoc/eioQIwQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      effect: ^4.0.0-beta.102
+
+  '@llm4ts/flow@0.4.0':
+    resolution: {integrity: sha512-u1hzbjOh5Nvj3N5tA/FnMsWZrNfcRE1PzsfkSp1oloPoGqNpD55ev+0DapVFlVI+HEF1zBXnHAinKbUkkKWDLw==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      effect: ^4.0.0-beta.102
+
+  '@llm4ts/runner@0.4.0':
+    resolution: {integrity: sha512-tYSILY16j44aa0EukosDUpT0YtFMjVoiLTTIcYUumkcbz265dboLiNw0qMt5OTGYsxtyM9SMoTCmiFmn2zOEww==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      effect: ^4.0.0-beta.102
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     resolution: {integrity: sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ==}
@@ -572,6 +599,21 @@ snapshots:
     optional: true
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
+
+  '@llm4ts/core@0.4.0(effect@4.0.0-beta.102)':
+    dependencies:
+      effect: 4.0.0-beta.102
+
+  '@llm4ts/flow@0.4.0(effect@4.0.0-beta.102)':
+    dependencies:
+      '@llm4ts/core': 0.4.0(effect@4.0.0-beta.102)
+      effect: 4.0.0-beta.102
+
+  '@llm4ts/runner@0.4.0(effect@4.0.0-beta.102)':
+    dependencies:
+      '@llm4ts/core': 0.4.0(effect@4.0.0-beta.102)
+      '@llm4ts/flow': 0.4.0(effect@4.0.0-beta.102)
+      effect: 4.0.0-beta.102
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true
