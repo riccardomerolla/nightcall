@@ -24,12 +24,15 @@ describe("Prompts", () => {
     assert.isUndefined(parseTriage("I think this looks fine."))
   })
 
-  it("parses QA verdicts", () => {
+  it("parses QA verdicts, tolerating markdown decoration", () => {
     assert.deepStrictEqual(parseQa("VERDICT: APPROVE\nLooks correct."), {
       approved: true,
       findings: "Looks correct."
     })
     assert.strictEqual(parseQa("VERDICT: REJECT\nMissing test.")?.approved, false)
+    assert.strictEqual(parseQa("**VERDICT: APPROVE**\nSolid.")?.approved, true)
+    assert.strictEqual(parseQa("## Verdict: reject\nNo tests.")?.approved, false)
+    assert.strictEqual(parseTriage("**VERDICT: ACCEPT**\n- criteria")?.kind, "Accept")
     assert.isUndefined(parseQa("ship it"))
   })
 

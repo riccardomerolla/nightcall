@@ -28,15 +28,21 @@ export const triagePrompt = (issue: IssueSummary): string =>
     "",
     issue.body.trim().length === 0 ? "(no body)" : issue.body,
     "",
-    "Reply with exactly one of:",
-    "VERDICT: ACCEPT followed by concise acceptance criteria as bullets, or",
-    "VERDICT: BOUNCE followed by the concrete questions the author must answer.",
+    "The first line of your reply must be exactly one of:",
+    "VERDICT: ACCEPT — followed by concise acceptance criteria as bullets, or",
+    "VERDICT: BOUNCE — followed by the concrete questions the author must answer.",
+    "No markdown decoration on the verdict line.",
     "Never propose code. Judge only whether the work is actionable."
   ].join("\n")
 
+// Emphasis-tolerant: models bold or heading-ify the verdict line
+// ("**VERDICT: APPROVE**", "## Verdict: reject"), so markdown decoration
+// is stripped before matching.
 const verdictRest = (reply: string, verdict: string): string | undefined => {
   const lines = reply.split(/\r?\n/)
-  const index = lines.findIndex((line) => line.trim().toUpperCase().startsWith(verdict))
+  const index = lines.findIndex((line) =>
+    line.replace(/[*_#>`]/g, "").trim().toUpperCase().startsWith(verdict)
+  )
   return index === -1 ? undefined : lines.slice(index + 1).join("\n").trim()
 }
 
@@ -86,9 +92,10 @@ export const qaPrompt = (issue: IssueSummary, criteria: string, diff: string): s
     diff,
     "```",
     "",
-    "Reply with exactly one of:",
-    "VERDICT: APPROVE followed by a one-paragraph review summary, or",
-    "VERDICT: REJECT followed by the concrete findings that must be fixed."
+    "The first line of your reply must be exactly one of:",
+    "VERDICT: APPROVE — followed by a one-paragraph review summary, or",
+    "VERDICT: REJECT — followed by the concrete findings that must be fixed.",
+    "No markdown decoration on the verdict line."
   ].join("\n")
 
 export const parseQa = (reply: string): QaVerdict | undefined => {

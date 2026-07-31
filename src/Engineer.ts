@@ -232,17 +232,21 @@ export const runIssue = (
         const base = yield* context.git.defaultBase
         const diff = yield* context.git.diffVsBase(base, true)
         const qa = yield* makeChat(context.reasoning, {})
-        const verdict =
+        const reply =
           diff.trim().length === 0
+            ? undefined
+            : yield* qa.ask(qaPrompt(intent.issue, triage.criteria, diff))
+        const verdict =
+          reply === undefined
             ? { approved: false, findings: "The change produced an empty diff." }
-            : parseQa(yield* qa.ask(qaPrompt(intent.issue, triage.criteria, diff)))
+            : parseQa(reply)
         if (verdict === undefined || !verdict.approved) {
           return yield* Effect.fail(
             ProcessError.make({
               message: "qa review",
               detail:
                 verdict === undefined
-                  ? "QA could not reach a verdict"
+                  ? `QA reply carried no parseable verdict. Raw reply:\n${(reply ?? "").slice(0, 1500)}`
                   : `QA rejected the change:\n${verdict.findings}`
             })
           )
@@ -277,10 +281,13 @@ export const runIssue = (
           yield* Effect.ignore(
             run(["git", "-C", worktree, "push", "-u", "origin", branch], workspaceDir)
           )
+          // The critical transition first, alone: gh issue edit dies wholesale
+          // on a label the repo doesn't have, and a partial edit that removed
+          // wip without adding failed strands the issue invisibly (trust-bar
+          // run 1, issue #1). The attempt label is a separate best-effort add.
           const attempt = attemptOf(intent.issue.labels) + 1
-          yield* Effect.ignore(
-            gh.editIssueLabels(ref, [...fail.add, attemptLabel(attempt)], fail.remove)
-          )
+          yield* Effect.ignore(gh.editIssueLabels(ref, fail.add, fail.remove))
+          yield* Effect.ignore(gh.editIssueLabels(ref, [attemptLabel(attempt)], []))
           const cells = yield* Ref.get(cellsRef)
           yield* tell(
             gh,
