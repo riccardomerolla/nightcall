@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { CostCell } from "@llm4ts/flow/CostLedger"
 import { IssueSummary } from "@llm4ts/flow/GitHubTool"
-import { parseQa, parseTriage, prBody, renderInvoice } from "../src/Prompts.ts"
+import { parseEpicChildren, parseQa, parseTriage, prBody, renderInvoice } from "../src/Prompts.ts"
 import { attemptLabel, attemptOf } from "../src/Protocol.ts"
 
 const issue = IssueSummary.make({
@@ -76,6 +76,24 @@ describe("Prompts", () => {
     assert.include(body, "Closes #7.")
     assert.include(body, "Solid change.")
     assert.include(body, "### Invoice")
+  })
+
+  it("parses epic decomposition replies into children", () => {
+    const reply = [
+      "CHILD: Domain schemas in lib/domain",
+      "Deliverables: Position, Portfolio, MifidProfile schemas.",
+      "Acceptance: npm run gate passes.",
+      "**CHILD: Importers in lib/import**",
+      "Deliverables: CSV and JSON importers.",
+      "Acceptance: fixtures decode."
+    ].join("\n")
+    const children = parseEpicChildren(reply)
+    assert.strictEqual(children?.length, 2)
+    assert.strictEqual(children?.[0]?.title, "Domain schemas in lib/domain")
+    assert.include(children?.[0]?.body, "Acceptance: npm run gate passes.")
+    assert.strictEqual(children?.[1]?.title, "Importers in lib/import")
+    assert.isUndefined(parseEpicChildren("I would split this into three parts."))
+    assert.isUndefined(parseEpicChildren("CHILD: title only, no body"))
   })
 
   it("tracks attempts through labels", () => {

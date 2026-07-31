@@ -55,6 +55,51 @@ export const parseTriage = (reply: string): Triage | undefined => {
   return bounce === undefined ? undefined : { kind: "Bounce", questions: bounce }
 }
 
+export interface EpicChild {
+  readonly title: string
+  readonly body: string
+}
+
+export const maxEpicChildren = 5
+
+export const epicDecompositionPrompt = (issue: IssueSummary, handbook: string): string =>
+  [
+    "You are the Tech Lead of a small software company. The CEO marked the",
+    "following GitHub issue as an epic. Decompose it into independently",
+    `implementable child issues — at most ${maxEpicChildren}, in build order`,
+    "(each child may depend only on earlier children).",
+    "",
+    `Epic #${issue.number}: ${issue.title}`,
+    "",
+    issue.body,
+    "",
+    "Format your reply as repeated blocks, nothing before the first block:",
+    "CHILD: <one-line title>",
+    "<the child issue body: concrete deliverables and acceptance criteria,",
+    "including the verification command the epic requires>",
+    "",
+    "Rules: no markdown decoration on CHILD lines; every child must name",
+    "concrete files/modules and testable acceptance criteria; never propose",
+    "code. A child an engineer cannot finish in one sitting is too big.",
+    ...(handbook.trim().length === 0 ? [] : ["", "Company handbook:", handbook])
+  ].join("\n")
+
+export const parseEpicChildren = (reply: string): ReadonlyArray<EpicChild> | undefined => {
+  const children: Array<{ title: string; lines: Array<string> }> = []
+  for (const line of reply.split(/\r?\n/)) {
+    const cleaned = line.replace(/[*_#>`]/g, "").trim()
+    if (cleaned.toUpperCase().startsWith("CHILD:")) {
+      children.push({ title: cleaned.slice("CHILD:".length).trim(), lines: [] })
+    } else if (children.length > 0) {
+      children[children.length - 1]?.lines.push(line)
+    }
+  }
+  const parsed = children
+    .map((child) => ({ title: child.title, body: child.lines.join("\n").trim() }))
+    .filter((child) => child.title.length > 0 && child.body.length > 0)
+  return parsed.length === 0 ? undefined : parsed
+}
+
 export const engineerBrief = (
   issue: IssueSummary,
   criteria: string,
