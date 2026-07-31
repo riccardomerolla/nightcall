@@ -15,7 +15,7 @@ import { makeGitHubTool, type GitHubToolShape, type IssueRef } from "@llm4ts/flo
 import { makePlanStore } from "@llm4ts/flow/Persistence"
 import { planFrom } from "@llm4ts/flow/Planner"
 import { lintCommand } from "@llm4ts/flow/Review"
-import { coderFromEnv } from "@llm4ts/runner/Connectors"
+import { coderFromEnv, withTurnLimit } from "@llm4ts/runner/Connectors"
 import {
   makeFlowRunnerContext,
   nodeFlowRunnerDependencies,
@@ -77,6 +77,11 @@ const run = (
           )
     )
   )
+
+const positiveIntOr = (raw: string | undefined, fallback: number): number => {
+  const parsed = raw === undefined ? Number.NaN : Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
 
 const exists = (path: string): Effect.Effect<boolean> =>
   Effect.tryPromise({ try: () => stat(path), catch: () => "missing" }).pipe(
@@ -182,7 +187,13 @@ export const runIssue = (
     })
     const planPath = join(stateDir, `issue-${intent.issue.number}-plan.md`)
     const dependencies = nodeFlowRunnerDependencies()
-    const coder = coderFromEnv(environment)
+    // Bounded darkness: a per-task turn limit and a per-issue wall clock.
+    // Trust-bar run 3 spent 84 minutes and 90k tokens on one importer task
+    // before the CLI died — without bounds, one degenerate task holds the
+    // company's only seat for hours.
+    const turnLimit = positiveIntOr(environment["NIGHTCALL_TURN_LIMIT"], 50)
+    const timeoutMinutes = positiveIntOr(environment["NIGHTCALL_ISSUE_TIMEOUT_MINUTES"], 30)
+    const coder = withTurnLimit(coderFromEnv(environment), turnLimit)
     const options = {
       workDir: worktree,
       workspace: worktree,
@@ -292,6 +303,18 @@ export const runIssue = (
         const tracker = yield* makeCostTracker()
         yield* tracker.consume(bundle.events)
         yield* runWithBundle(bundle, options, body, dependencies).pipe(
+          Effect.timeoutOrElse({
+            duration: `${timeoutMinutes} minutes`,
+            orElse: () =>
+              Effect.fail(
+                ProcessError.make({
+                  message: "issue wall clock",
+                  detail:
+                    `exceeded ${timeoutMinutes} minutes; completed tasks are ` +
+                    "committed and the persisted plan resumes on retry"
+                })
+              )
+          }),
           Effect.ensuring(
             tracker
               .awaitDrained(bundle.events)
