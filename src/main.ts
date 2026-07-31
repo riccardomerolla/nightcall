@@ -7,6 +7,7 @@ import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { configFromEnv } from "./Config.ts"
 import { runIssue } from "./Engineer.ts"
 import { heartbeat } from "./Heartbeat.ts"
+import { runEpic } from "./TechLead.ts"
 
 // The Chief of Staff daemon: decode config, then run the idempotent
 // heartbeat on a fixed schedule. Observe mode is the default — the daemon
@@ -33,6 +34,7 @@ const program = Effect.gen(function* () {
   const beat = heartbeat(gh, config, loggingEvents, {
     claimMode,
     worker: (intent) => runIssue(gh, intent, config, process.env, loggingEvents),
+    epicWorker: (intent) => runEpic(gh, intent, config, process.env, loggingEvents),
     workspaceDir,
     ...(standupIssue === undefined ? {} : { standupIssue })
   }).pipe(

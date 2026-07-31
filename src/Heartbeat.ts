@@ -31,7 +31,7 @@ export interface ClaimIntent {
 
 export interface HeartbeatDecision {
   readonly claims: ReadonlyArray<ClaimIntent>
-  readonly skippedEpics: ReadonlyArray<ClaimIntent>
+  readonly epics: ReadonlyArray<ClaimIntent>
   readonly inFlight: number
   readonly throttled: boolean
 }
@@ -58,11 +58,11 @@ export const poll = (
     })
   )
 
-// Claim the oldest plain ready issues, capped by free engineer seats
-// across all targets — unless today's ledger spend already exhausted the
-// company's daily budget, in which case nothing new is claimed. Epics are
-// skipped until the Tech Lead can decompose them; they are reported,
-// never silently dropped.
+// Ready epics go to the Tech Lead for decomposition; plain ready issues
+// are claimed oldest-first, capped by free engineer seats across all
+// targets — unless today's ledger spend already exhausted the company's
+// daily budget, in which case nothing new starts. Epics are decomposed
+// before claims so their children enter the queue as early as possible.
 export const decide = (
   snapshots: ReadonlyArray<TargetSnapshot>,
   config: CompanyConfig,
@@ -72,19 +72,21 @@ export const decide = (
   const throttled = spentTodayUsd >= config.dailyBudgetUsd
   let seats = throttled ? 0 : Math.max(0, config.engineerParallelism - inFlight)
   const claims: Array<ClaimIntent> = []
-  const skippedEpics: Array<ClaimIntent> = []
+  const epics: Array<ClaimIntent> = []
   for (const snapshot of snapshots) {
     const oldestFirst = [...snapshot.ready].sort((a, b) => a.number - b.number)
     for (const issue of oldestFirst) {
       if (isEpic(issue.labels)) {
-        skippedEpics.push({ target: snapshot.target, issue })
+        if (!throttled) {
+          epics.push({ target: snapshot.target, issue })
+        }
       } else if (seats > 0) {
         claims.push({ target: snapshot.target, issue })
         seats -= 1
       }
     }
   }
-  return { claims, skippedEpics, inFlight, throttled }
+  return { claims, epics, inFlight, throttled }
 }
 
 export const claimComment = signed(
@@ -119,6 +121,9 @@ export interface HeartbeatOptions {
   // Works one claimed issue to completion; wired to Engineer.runIssue by
   // the daemon, injectable for tests. Must never fail.
   readonly worker?: (intent: ClaimIntent) => Effect.Effect<WorkerReport>
+  // Decomposes one ready epic into child issues; wired to
+  // TechLead.runEpic. Epics are observed-only when unset.
+  readonly epicWorker?: (intent: ClaimIntent) => Effect.Effect<WorkerReport>
   // Where the ledger lives; no ledger (and no spend throttle) when unset.
   readonly workspaceDir?: string
   // Optional standup issue: a heartbeat with activity posts a summary
@@ -142,7 +147,7 @@ export const standupSummary = (
         `  - ${intent.target.slug}#${intent.issue.number}: ${report.outcome} ` +
         `($${report.costUsd.toFixed(4)})`
     ),
-    `- Epics waiting for decomposition: ${decision.skippedEpics.length}`,
+    `- Epics decomposed this beat: ${decision.epics.length}`,
     `- Spent today: $${spentTodayUsd.toFixed(2)} of $${dailyBudgetUsd.toFixed(2)}` +
       (decision.throttled ? " — claim throttle active" : "")
   ].join("\n")
@@ -167,16 +172,39 @@ export const heartbeat = (
 
     yield* say(
       `heartbeat: ${decision.inFlight} in flight, ` +
-        `${decision.claims.length} claimable, ${decision.skippedEpics.length} epic(s) waiting` +
+        `${decision.claims.length} claimable, ${decision.epics.length} epic(s) to decompose` +
         (decision.throttled ? ", daily budget exhausted — not claiming" : "")
     )
-    for (const epic of decision.skippedEpics) {
-      yield* say(
-        `epic ${epic.target.slug}#${epic.issue.number} needs a Tech Lead to decompose — skipped`
-      )
-    }
 
     const worked: Array<{ intent: ClaimIntent; report: WorkerReport }> = []
+    for (const epic of decision.epics) {
+      if (!options.claimMode || options.epicWorker === undefined) {
+        yield* say(
+          `observe mode: would decompose epic ${epic.target.slug}#${epic.issue.number}: ` +
+            epic.issue.title
+        )
+        continue
+      }
+      const report = yield* options.epicWorker(epic)
+      worked.push({ intent: epic, report })
+      spent += report.costUsd
+      yield* say(
+        `epic ${epic.target.slug}#${epic.issue.number} → ${report.outcome} ` +
+          `($${report.costUsd.toFixed(4)}, $${spent.toFixed(2)} today)`
+      )
+      if (options.workspaceDir !== undefined) {
+        yield* appendLedger(
+          options.workspaceDir,
+          LedgerEntry.make({
+            at: nowIso,
+            target: epic.target.slug,
+            issue: epic.issue.number,
+            outcome: report.outcome,
+            costUsd: report.costUsd
+          })
+        )
+      }
+    }
     for (const intent of decision.claims) {
       // Claiming without a worker would strand the issue in factory:wip,
       // so a missing worker falls back to observe behavior.

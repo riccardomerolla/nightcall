@@ -51,7 +51,7 @@ describe("Heartbeat", () => {
       [3]
     )
     assert.deepStrictEqual(
-      idle.skippedEpics.map((intent) => intent.issue.number),
+      idle.epics.map((intent) => intent.issue.number),
       [5]
     )
 
@@ -65,6 +65,7 @@ describe("Heartbeat", () => {
     const throttled = decide([{ target, ready, wip: [] }], config, 25)
     assert.isTrue(throttled.throttled)
     assert.deepStrictEqual(throttled.claims, [])
+    assert.deepStrictEqual(throttled.epics, [])
     const underBudget = decide([{ target, ready, wip: [] }], config, 24.99)
     assert.isFalse(underBudget.throttled)
     assert.strictEqual(underBudget.claims.length, 1)
@@ -77,7 +78,10 @@ describe("Heartbeat", () => {
         ProcessResult.make({ stdout: [issues], exitCode: 0 })
       const readyRow =
         '[{"number":3,"title":"T","body":"B","author":{"login":"ceo"},' +
-        `"labels":[{"name":"${Labels.ready}"}],"updatedAt":"2026-07-31T00:00:00Z"}]`
+        `"labels":[{"name":"${Labels.ready}"}],"updatedAt":"2026-07-31T00:00:00Z"},` +
+        '{"number":5,"title":"E","body":"Epic body","author":{"login":"ceo"},' +
+        `"labels":[{"name":"${Labels.ready}"},{"name":"${Labels.epic}"}],` +
+        '"updatedAt":"2026-07-31T00:00:00Z"}]'
       const ok = ProcessResult.make({ stdout: [], exitCode: 0 })
       const issueRef = summary(3, [Labels.ready]).ref(repo)
       const fake = yield* makeFakeProcessExecutor({
@@ -108,10 +112,20 @@ describe("Heartbeat", () => {
         costUsd: number
       }> => Effect.succeed({ outcome: "Shipped" as const, costUsd: 1.25 })
 
+      const epicReports: Array<number> = []
+      const epicWorker = (intent: {
+        issue: { number: number }
+      }): Effect.Effect<{ outcome: "Shipped" | "Bounced" | "Failed"; costUsd: number }> =>
+        Effect.sync(() => {
+          epicReports.push(intent.issue.number)
+          return { outcome: "Shipped" as const, costUsd: 0.5 }
+        })
+
       const observed = yield* heartbeat(gh, config, events, { claimMode: false })
       const readOnlyCalls = (yield* fake.recorded).length
-      const claimed = yield* heartbeat(gh, config, events, { claimMode: true, worker })
+      const claimed = yield* heartbeat(gh, config, events, { claimMode: true, worker, epicWorker })
       const allCalls = yield* fake.recorded
+      assert.deepStrictEqual(epicReports, [5])
 
       assert.strictEqual(observed.claims.length, 1)
       assert.strictEqual(readOnlyCalls, 2)
