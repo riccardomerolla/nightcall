@@ -1,0 +1,24 @@
+{
+  "name": "nightcall",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A dark software house: a virtual AI company on llm4ts with GitHub as its control plane",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -b tsconfig.json --pretty false",
+    "test": "vitest run",
+    "start": "node --experimental-strip-types src/main.ts"
+  },
+  "dependencies": {
+    "effect": "^4.0.0-beta.102"
+  },
+  "devDependencies": {
+    "@effect/vitest": "beta",
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}
