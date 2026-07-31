@@ -185,7 +185,11 @@ export const runIssue = (
         // Tech Lead: fresh chat on the read-only reasoning seat. An
         // unparseable verdict bounces — a confused triager must never
         // green-light work.
-        const techLead = yield* makeChat(context.reasoning, { system: handbook })
+        const techLead = yield* makeChat(context.reasoning, {
+          system: handbook,
+          events: context.events,
+          agent: "techlead"
+        })
         const triage = parseTriage(yield* techLead.ask(triagePrompt(intent.issue)))
         if (triage === undefined || triage.kind === "Bounce") {
           const questions =
@@ -231,7 +235,7 @@ export const runIssue = (
         // unparseable verdict rejects — shipping nothing is failure.
         const base = yield* context.git.defaultBase
         const diff = yield* context.git.diffVsBase(base, true)
-        const qa = yield* makeChat(context.reasoning, {})
+        const qa = yield* makeChat(context.reasoning, { events: context.events, agent: "qa" })
         const reply =
           diff.trim().length === 0
             ? undefined
