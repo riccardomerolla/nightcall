@@ -104,6 +104,9 @@ export const ensureWorktree = (
     }
     yield* run(["git", "-C", repoDir, "fetch", "origin", "--prune"], workspaceDir)
     if (!(yield* exists(worktree))) {
+      // Branch from origin/HEAD, not the clone's local HEAD: fetch never
+      // moves local main, so an implicit start point would base new work
+      // on however stale the clone happens to be.
       yield* run(
         [
           "git",
@@ -113,7 +116,8 @@ export const ensureWorktree = (
           "add",
           "-B",
           branchFor(intent.issue.number),
-          worktree
+          worktree,
+          "origin/HEAD"
         ],
         workspaceDir
       )
