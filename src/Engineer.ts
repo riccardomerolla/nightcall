@@ -166,7 +166,20 @@ export const runIssue = (
     const startedAtMs = yield* Clock.currentTimeMillis
     const runId = `nightcall-${intent.issue.number}-${startedAtMs}`
     const store = makePlanStore(nodePlainFileStore)
-    const planPath = join(worktree, ".llm4ts", `nightcall-issue-${intent.issue.number}.md`)
+    // Plans and traces live OUTSIDE the worktree: commitAll sweeps the
+    // whole tree, and run-state (prompts, tool output) must never land in
+    // the target repo's history. State survives worktree deletion, which
+    // also makes resume more robust.
+    const stateDir = join(
+      workspaceDir,
+      "state",
+      `${intent.target.owner}__${intent.target.repo}`
+    )
+    yield* Effect.tryPromise({
+      try: () => mkdir(stateDir, { recursive: true }),
+      catch: (error) => ProcessError.make({ message: "mkdir state", detail: String(error) })
+    })
+    const planPath = join(stateDir, `issue-${intent.issue.number}-plan.md`)
     const dependencies = nodeFlowRunnerDependencies()
     const coder = coderFromEnv(environment)
     const options = {
@@ -174,7 +187,7 @@ export const runIssue = (
       workspace: worktree,
       userPrompt: engineerBrief(intent.issue, "", handbook),
       coder: CliConnectorConfig.make({ ...coder, workingDir: worktree }),
-      tracePath: join(worktree, ".llm4ts", `nightcall-trace-${runId}.jsonl`),
+      tracePath: join(stateDir, `trace-${runId}.jsonl`),
       runId,
       verbosity: parseVerbosity(environment["LLM4TS_VERBOSITY"]),
       budget: CostBudget.make({ maximumCostUsd: budgetUsd })
