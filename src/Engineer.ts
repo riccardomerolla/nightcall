@@ -26,6 +26,7 @@ import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
 import type { CompanyConfig } from "./Config.ts"
 import { repoRefOf, type ClaimIntent } from "./Heartbeat.ts"
+import { makeProgressEvents } from "./Progress.ts"
 import {
   engineerBrief,
   parseQa,
@@ -201,10 +202,12 @@ export const runIssue = (
         }
 
         // Engineer: plan once (resumable), then the proven per-task
-        // machinery from implementPlanFlow.
+        // machinery from implementPlanFlow. Stage events are mirrored to
+        // the issue as ▶/✔/✖ progress comments.
         const brief = engineerBrief(intent.issue, triage.criteria, handbook)
         const plan = store.recoverOrCreate(planPath, planFrom(context.reasoning, brief))
-        yield* implementPlanFlow(context, {
+        const progress = yield* makeProgressEvents(context.events, context.hosting, ref)
+        yield* implementPlanFlow({ ...context, events: progress }, {
           store,
           planPath,
           plan,

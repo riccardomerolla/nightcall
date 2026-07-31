@@ -24,7 +24,9 @@ the humans sleep.
 - Branches: `factory/issue-<n>`. Commits: imperative mood, reference the
   issue.
 - PR body: what changed, why, how it was verified, cost invoice line.
-- Every comment the company writes ends with: `— Nightcall 🌙`
+- Every report comment the company writes ends with: `— Nightcall 🌙`.
+  Progress ticks (`▶` / `✔` / `✖` per-task lines) are exempt — they stay
+  single-line.
 
 ## Escalation
 
