@@ -60,6 +60,12 @@ export interface EpicChild {
   readonly body: string
 }
 
+// Marker appended to every child body at creation; children carrying it
+// were specified by the Tech Lead's decomposition and skip re-triage.
+export const epicChildMarker = (parent: number): string => `Parent: #${parent} (epic)`
+
+export const isEpicChild = (body: string): boolean => /Parent: #\d+ \(epic\)\s*$/.test(body.trim())
+
 export const maxEpicChildren = 5
 
 export const epicDecompositionPrompt = (issue: IssueSummary, handbook: string): string =>
@@ -81,6 +87,11 @@ export const epicDecompositionPrompt = (issue: IssueSummary, handbook: string): 
     "Rules: no markdown decoration on CHILD lines; every child must name",
     "concrete files/modules and testable acceptance criteria; never propose",
     "code. A child an engineer cannot finish in one sitting is too big.",
+    "Children are worked strictly in the order you emit them: a later child",
+    "may assume all earlier children are merged, and an earlier child must",
+    "create everything later children need. Each child must be fully",
+    "specified by its own body — never reference a child you do not emit,",
+    "and never mark a child as blocked on anything outside this list.",
     ...(handbook.trim().length === 0 ? [] : ["", "Company handbook:", handbook])
   ].join("\n")
 

@@ -18,7 +18,12 @@ import {
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
 import type { CompanyConfig } from "./Config.ts"
 import { repoRefOf, type ClaimIntent, type WorkerReport } from "./Heartbeat.ts"
-import { epicDecompositionPrompt, maxEpicChildren, parseEpicChildren } from "./Prompts.ts"
+import {
+  epicChildMarker,
+  epicDecompositionPrompt,
+  maxEpicChildren,
+  parseEpicChildren
+} from "./Prompts.ts"
 import { Labels, signed } from "./Protocol.ts"
 
 // Epic decomposition: the Tech Lead turns one CEO epic into ordered child
@@ -92,7 +97,7 @@ export const runEpic = (
           const childRef = yield* gh.createIssue(
             repo,
             child.title,
-            `${child.body}\n\nParent: #${intent.issue.number} (epic)`,
+            `${child.body}\n\n${epicChildMarker(intent.issue.number)}`,
             [Labels.ready]
           )
           created.push(`- #${childRef.number} ${child.title}`)

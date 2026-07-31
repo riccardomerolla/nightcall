@@ -29,6 +29,7 @@ import { repoRefOf, type ClaimIntent } from "./Heartbeat.ts"
 import { makeProgressEvents } from "./Progress.ts"
 import {
   engineerBrief,
+  isEpicChild,
   parseQa,
   parseTriage,
   prBody,
@@ -199,33 +200,41 @@ export const runIssue = (
 
     const body = (context: FlowContextShape): Effect.Effect<void, FlowError> =>
       Effect.gen(function* () {
-        // Tech Lead: fresh chat on the read-only reasoning seat. An
-        // unparseable verdict bounces — a confused triager must never
-        // green-light work.
-        const techLead = yield* makeChat(context.reasoning, {
-          system: handbook,
-          events: context.events,
-          agent: "techlead"
-        })
-        const triage = parseTriage(yield* techLead.ask(triagePrompt(intent.issue)))
-        if (triage === undefined || triage.kind === "Bounce") {
-          const questions =
-            triage === undefined
-              ? "Triage could not reach a verdict; please tighten the issue description."
-              : triage.questions
-          yield* context.hosting.writeIssueComment(
-            ref,
-            signed(`Bounced by the Tech Lead:\n\n${questions}`)
-          )
-          yield* context.hosting.editIssueLabels(ref, bounce.add, bounce.remove)
-          yield* Ref.set(outcome, "Bounced")
-          return
+        // Epic children were specified by the Tech Lead's own
+        // decomposition — re-triaging them in fresh context invites
+        // self-second-guessing (trust-bar run: the triager bounced a
+        // child its decomposition wrote). Their body IS the criteria.
+        let criteria = ""
+        if (!isEpicChild(intent.issue.body)) {
+          // Tech Lead: fresh chat on the read-only reasoning seat. An
+          // unparseable verdict bounces — a confused triager must never
+          // green-light work.
+          const techLead = yield* makeChat(context.reasoning, {
+            system: handbook,
+            events: context.events,
+            agent: "techlead"
+          })
+          const triage = parseTriage(yield* techLead.ask(triagePrompt(intent.issue)))
+          if (triage === undefined || triage.kind === "Bounce") {
+            const questions =
+              triage === undefined
+                ? "Triage could not reach a verdict; please tighten the issue description."
+                : triage.questions
+            yield* context.hosting.writeIssueComment(
+              ref,
+              signed(`Bounced by the Tech Lead:\n\n${questions}`)
+            )
+            yield* context.hosting.editIssueLabels(ref, bounce.add, bounce.remove)
+            yield* Ref.set(outcome, "Bounced")
+            return
+          }
+          criteria = triage.criteria
         }
 
         // Engineer: plan once (resumable), then the proven per-task
         // machinery from implementPlanFlow. Stage events are mirrored to
         // the issue as ▶/✔/✖ progress comments.
-        const brief = engineerBrief(intent.issue, triage.criteria, handbook)
+        const brief = engineerBrief(intent.issue, criteria, handbook)
         const plan = store.recoverOrCreate(planPath, planFrom(context.reasoning, brief))
         const progress = yield* makeProgressEvents(context.events, context.hosting, ref)
         yield* implementPlanFlow({ ...context, events: progress }, {
@@ -256,7 +265,7 @@ export const runIssue = (
         const reply =
           diff.trim().length === 0
             ? undefined
-            : yield* qa.ask(qaPrompt(intent.issue, triage.criteria, diff))
+            : yield* qa.ask(qaPrompt(intent.issue, criteria, diff))
         const verdict =
           reply === undefined
             ? { approved: false, findings: "The change produced an empty diff." }

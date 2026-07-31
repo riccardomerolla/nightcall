@@ -62,7 +62,13 @@ export class Transition extends Schema.Class<Transition>("Transition")({
 }) {}
 
 export const claim = Transition.make({ add: [Labels.wip], remove: [Labels.ready] })
-export const bounce = Transition.make({ add: [Labels.needsInfo], remove: [Labels.ready] })
+// Bounce can happen before a claim (epic triage) or after one (engineer
+// pipeline), so it clears both queue markers — a bounced issue must never
+// keep occupying an engineer seat via a leftover wip label.
+export const bounce = Transition.make({
+  add: [Labels.needsInfo],
+  remove: [Labels.ready, Labels.wip]
+})
 export const sendToReview = Transition.make({ add: [Labels.review], remove: [Labels.wip] })
 export const fail = Transition.make({
   add: [Labels.failed],

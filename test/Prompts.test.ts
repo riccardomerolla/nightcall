@@ -1,8 +1,15 @@
 import { assert, describe, it } from "@effect/vitest"
 import { CostCell } from "@llm4ts/flow/CostLedger"
 import { IssueSummary } from "@llm4ts/flow/GitHubTool"
-import { parseEpicChildren, parseQa, parseTriage, prBody, renderInvoice } from "../src/Prompts.ts"
-import { attemptLabel, attemptOf } from "../src/Protocol.ts"
+import {
+  isEpicChild,
+  parseEpicChildren,
+  parseQa,
+  parseTriage,
+  prBody,
+  renderInvoice
+} from "../src/Prompts.ts"
+import { Labels, attemptLabel, attemptOf, bounce } from "../src/Protocol.ts"
 
 const issue = IssueSummary.make({
   number: 7,
@@ -94,6 +101,12 @@ describe("Prompts", () => {
     assert.strictEqual(children?.[1]?.title, "Importers in lib/import")
     assert.isUndefined(parseEpicChildren("I would split this into three parts."))
     assert.isUndefined(parseEpicChildren("CHILD: title only, no body"))
+  })
+
+  it("recognizes epic children and clears both queue markers on bounce", () => {
+    assert.isTrue(isEpicChild("Do the thing.\n\nParent: #11 (epic)"))
+    assert.isFalse(isEpicChild("Do the thing. See #11."))
+    assert.deepStrictEqual([...bounce.remove], [Labels.ready, Labels.wip])
   })
 
   it("tracks attempts through labels", () => {
