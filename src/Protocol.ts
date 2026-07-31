@@ -71,6 +71,20 @@ export const fail = Transition.make({
 
 export const branchFor = (issueNumber: number): string => `factory/issue-${issueNumber}`
 
+// Attempt bookkeeping lives in labels like everything else, so the
+// max-attempts guard survives daemon restarts without local state.
+export const attemptPrefix = "factory:attempt-"
+
+export const attemptLabel = (attempt: number): string => `${attemptPrefix}${attempt}`
+
+export const attemptOf = (labels: ReadonlyArray<string>): number => {
+  const attempts = labels
+    .filter((label) => label.startsWith(attemptPrefix))
+    .map((label) => Number.parseInt(label.slice(attemptPrefix.length), 10))
+    .filter((value) => Number.isInteger(value) && value > 0)
+  return attempts.length === 0 ? 0 : Math.max(...attempts)
+}
+
 export const signature = "— Nightcall 🌙"
 
 export const signed = (body: string): string => `${body.trimEnd()}\n\n${signature}`

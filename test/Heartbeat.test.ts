@@ -60,6 +60,16 @@ describe("Heartbeat", () => {
     assert.strictEqual(busy.inFlight, 1)
   })
 
+  it("decide stops claiming when today's spend exhausts the daily budget", () => {
+    const ready = [summary(3, [Labels.ready])]
+    const throttled = decide([{ target, ready, wip: [] }], config, 25)
+    assert.isTrue(throttled.throttled)
+    assert.deepStrictEqual(throttled.claims, [])
+    const underBudget = decide([{ target, ready, wip: [] }], config, 24.99)
+    assert.isFalse(underBudget.throttled)
+    assert.strictEqual(underBudget.claims.length, 1)
+  })
+
   it.effect("claims via gh in claim mode and stays read-only in observe mode", () =>
     Effect.gen(function* () {
       const repo = repoRefOf(target)
@@ -93,9 +103,14 @@ describe("Heartbeat", () => {
       const events = yield* makeCollectingFlowEvents
       const gh = makeGitHubTool(fake.executor, "/anywhere", events)
 
+      const worker = (): Effect.Effect<{
+        outcome: "Shipped" | "Bounced" | "Failed"
+        costUsd: number
+      }> => Effect.succeed({ outcome: "Shipped" as const, costUsd: 1.25 })
+
       const observed = yield* heartbeat(gh, config, events, { claimMode: false })
       const readOnlyCalls = (yield* fake.recorded).length
-      const claimed = yield* heartbeat(gh, config, events, { claimMode: true })
+      const claimed = yield* heartbeat(gh, config, events, { claimMode: true, worker })
       const allCalls = yield* fake.recorded
 
       assert.strictEqual(observed.claims.length, 1)

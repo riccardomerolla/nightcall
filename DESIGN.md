@@ -13,6 +13,12 @@ with one structural bet: GitHub replaces Paperclip's server, database, and
 UI entirely.
 
 Decision record from the founding grilling session, 2026-07-31.
+Implementation status lives in [README.md](README.md); v1 deviations from
+this record: the standup is a comment stream (not a regenerated Mermaid
+body — GitHubTool has no issue-body edit), the ledger is a local JSONL
+under the workspace (orphan-branch publication deferred), QA rejection
+fails the attempt rather than looping findings back to the Engineer, and
+epics are reported but not yet decomposed.
 
 ## Constraints
 
