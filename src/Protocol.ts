@@ -11,7 +11,12 @@ export const Labels = {
   needsInfo: "factory:needs-info",
   wip: "factory:wip",
   review: "factory:review",
-  failed: "factory:failed"
+  failed: "factory:failed",
+  // One-shot modifier set by the CEO next to factory:ready: discard all
+  // prior state for the issue (worktree, persisted plan, branch — local
+  // and remote) and start from a brand-new branch off origin/HEAD. The
+  // orchestrator strips it once the reset is applied.
+  fresh: "factory:fresh"
 } as const
 
 export const budgetLabelPrefix = "factory:budget-"
@@ -44,6 +49,8 @@ export const phaseOf = (labels: ReadonlyArray<string>): IssuePhase => {
 }
 
 export const isEpic = (labels: ReadonlyArray<string>): boolean => labels.includes(Labels.epic)
+
+export const isFresh = (labels: ReadonlyArray<string>): boolean => labels.includes(Labels.fresh)
 
 export const budgetOverrideUsd = (labels: ReadonlyArray<string>): number | undefined => {
   const parsed = labels

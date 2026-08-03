@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat } from "node:fs/promises"
+import { mkdir, readFile, rm, stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
@@ -40,12 +40,14 @@ import {
   triagePrompt
 } from "./Prompts.ts"
 import {
+  Labels,
   attemptLabel,
   attemptOf,
   bounce,
   branchFor,
   budgetOverrideUsd,
   fail,
+  isFresh,
   sendToReview,
   signed
 } from "./Protocol.ts"
@@ -112,6 +114,45 @@ const exists = (path: string): Effect.Effect<boolean> =>
     Effect.catch(() => Effect.succeed(false))
   )
 
+export const issuePaths = (
+  workspaceDir: string,
+  intent: ClaimIntent
+): { readonly repoDir: string; readonly worktree: string } => {
+  const slugDir = `${intent.target.owner}__${intent.target.repo}`
+  return {
+    repoDir: join(workspaceDir, "repos", slugDir),
+    worktree: join(workspaceDir, "worktrees", slugDir, `issue-${intent.issue.number}`)
+  }
+}
+
+// factory:fresh — discard every trace of prior attempts so the run starts
+// from a brand-new branch off origin/HEAD: worktree, persisted plan, and
+// the branch locally and on the remote. All best-effort: a partially
+// applied reset still proceeds (worktree add -B re-points the branch).
+export const resetIssueState = (
+  workspaceDir: string,
+  intent: ClaimIntent,
+  planPath: string
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const { repoDir, worktree } = issuePaths(workspaceDir, intent)
+    const branch = branchFor(intent.issue.number)
+    yield* Effect.ignore(
+      Effect.tryPromise({
+        try: () => rm(worktree, { recursive: true, force: true }),
+        catch: (error) => String(error)
+      })
+    )
+    yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
+    yield* Effect.ignore(run(["git", "-C", repoDir, "branch", "-D", branch], workspaceDir))
+    yield* Effect.ignore(
+      run(["git", "-C", repoDir, "push", "origin", "--delete", branch], workspaceDir)
+    )
+    yield* Effect.ignore(
+      Effect.tryPromise({ try: () => rm(planPath, { force: true }), catch: (error) => String(error) })
+    )
+  })
+
 // Clone-on-first-use per target, then a worktree per issue. An existing
 // worktree is reused as-is: the persisted plan inside it makes a re-run
 // resume instead of restart (DESIGN.md reconciliation).
@@ -120,9 +161,7 @@ export const ensureWorktree = (
   intent: ClaimIntent
 ): Effect.Effect<string, FlowError> =>
   Effect.gen(function* () {
-    const slugDir = `${intent.target.owner}__${intent.target.repo}`
-    const repoDir = join(workspaceDir, "repos", slugDir)
-    const worktree = join(workspaceDir, "worktrees", slugDir, `issue-${intent.issue.number}`)
+    const { repoDir, worktree } = issuePaths(workspaceDir, intent)
     yield* Effect.tryPromise({
       try: () => mkdir(join(workspaceDir, "repos"), { recursive: true }),
       catch: (error) =>
@@ -186,15 +225,6 @@ export const runIssue = (
   Effect.gen(function* () {
     const ref = intent.issue.ref(repoRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
-    const worktree = yield* ensureWorktree(workspaceDir, intent)
-    const handbook = yield* readHandbook(process.cwd())
-    const budgetUsd = budgetOverrideUsd(intent.issue.labels) ?? config.issueBudgetUsd
-    const branch = branchFor(intent.issue.number)
-    const gate = environment["NIGHTCALL_GATE"]?.trim()
-
-    const startedAtMs = yield* Clock.currentTimeMillis
-    const runId = `nightcall-${intent.issue.number}-${startedAtMs}`
-    const store = makePlanStore(nodePlainFileStore)
     // Plans and traces live OUTSIDE the worktree: commitAll sweeps the
     // whole tree, and run-state (prompts, tool output) must never land in
     // the target repo's history. State survives worktree deletion, which
@@ -209,6 +239,22 @@ export const runIssue = (
       catch: (error) => ProcessError.make({ message: "mkdir state", detail: String(error) })
     })
     const planPath = join(stateDir, `issue-${intent.issue.number}-plan.md`)
+
+    if (isFresh(intent.issue.labels)) {
+      yield* resetIssueState(workspaceDir, intent, planPath)
+      yield* Effect.ignore(gh.editIssueLabels(ref, [], [Labels.fresh]))
+      yield* tell(gh, ref, "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded.")
+    }
+
+    const worktree = yield* ensureWorktree(workspaceDir, intent)
+    const handbook = yield* readHandbook(process.cwd())
+    const budgetUsd = budgetOverrideUsd(intent.issue.labels) ?? config.issueBudgetUsd
+    const branch = branchFor(intent.issue.number)
+    const gate = environment["NIGHTCALL_GATE"]?.trim()
+
+    const startedAtMs = yield* Clock.currentTimeMillis
+    const runId = `nightcall-${intent.issue.number}-${startedAtMs}`
+    const store = makePlanStore(nodePlainFileStore)
     const dependencies = nodeFlowRunnerDependencies()
     // Bounded darkness: a per-task turn limit and a per-issue wall clock.
     // Trust-bar run 3 spent 84 minutes and 90k tokens on one importer task
