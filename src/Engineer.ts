@@ -13,6 +13,7 @@ import { ProcessError, type FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import { makeGitHubTool, type GitHubToolShape, type IssueRef } from "@llm4ts/flow/GitHubTool"
 import { makePlanStore } from "@llm4ts/flow/Persistence"
+import { Plan } from "@llm4ts/flow/Plan"
 import { planFrom } from "@llm4ts/flow/Planner"
 import { lintCommand } from "@llm4ts/flow/Review"
 import { coderFromEnv, withTurnLimit } from "@llm4ts/runner/Connectors"
@@ -78,6 +79,27 @@ const run = (
           )
     )
   )
+
+// Deterministic guard against planner-invented non-coding tasks: a task
+// like "Verify importer integration quality" can never produce a diff, so
+// the no-op protocol fails the whole run when the model forgets the
+// TASK_ALREADY_SATISFIED confirmation. Prompt guidance failed twice
+// (trust-bar runs 4 and 5); policy that can be code is code. Completed
+// tasks are kept for checkbox integrity.
+const verificationTaskPattern = /^(verify|verification|validate|confirm|ensure|check|gate|run (the )?(tests?|gate|build))\b/i
+
+export const pruneNonCodingTasks = (plan: Plan): Plan => {
+  const tasks = plan.tasks.filter(
+    (task) => task.completed || !verificationTaskPattern.test(task.title.trim())
+  )
+  return tasks.length === plan.tasks.length
+    ? plan
+    : Plan.make({
+        epicId: plan.epicId,
+        tasks,
+        ...(plan.brief === undefined ? {} : { brief: plan.brief })
+      })
+}
 
 const positiveIntOr = (raw: string | undefined, fallback: number): number => {
   const parsed = raw === undefined ? Number.NaN : Number(raw)
@@ -247,7 +269,9 @@ export const runIssue = (
         // machinery from implementPlanFlow. Stage events are mirrored to
         // the issue as ▶/✔/✖ progress comments.
         const brief = engineerBrief(intent.issue, criteria, handbook)
-        const plan = store.recoverOrCreate(planPath, planFrom(context.reasoning, brief))
+        const plan = store
+          .recoverOrCreate(planPath, planFrom(context.reasoning, brief))
+          .pipe(Effect.map(pruneNonCodingTasks))
         const progress = yield* makeProgressEvents(context.events, context.hosting, ref)
         yield* implementPlanFlow({ ...context, events: progress }, {
           store,
