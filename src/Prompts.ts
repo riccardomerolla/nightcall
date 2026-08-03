@@ -123,8 +123,18 @@ export const engineerBrief = (
     "",
     "Acceptance criteria from the Tech Lead:",
     criteria.trim().length === 0 ? "(none beyond the issue text)" : criteria,
+    "",
+    "Planning rules: plan only tasks that create or modify files in this",
+    "repository. Never plan verification, gate, build, or test-run tasks —",
+    "the harness runs the full CI gate automatically after every task.",
     ...(handbook.trim().length === 0 ? [] : ["", "Company handbook:", handbook])
   ].join("\n")
+
+// Appended to the coder's system prompt: the no-op confirmation protocol
+// implementPlanFlow enforces when a task produces no diff.
+export const noopRule =
+  "If a task requires no file changes because the repository already " +
+  "satisfies it, reply with exactly TASK_ALREADY_SATISFIED and nothing else."
 
 export interface QaVerdict {
   readonly approved: boolean

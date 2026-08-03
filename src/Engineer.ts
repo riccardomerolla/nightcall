@@ -30,6 +30,7 @@ import { makeProgressEvents } from "./Progress.ts"
 import {
   engineerBrief,
   isEpicChild,
+  noopRule,
   parseQa,
   parseTriage,
   prBody,
@@ -254,7 +255,7 @@ export const runIssue = (
           plan,
           chatPerTask: true,
           checkoutBranch: false,
-          ...(handbook.trim().length === 0 ? {} : { system: handbook }),
+          system: [noopRule, handbook.trim()].filter((part) => part.length > 0).join("\n\n"),
           maxRounds: 3,
           ...(gate === undefined || gate.length === 0
             ? {}
