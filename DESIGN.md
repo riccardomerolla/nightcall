@@ -106,6 +106,7 @@ backlog self-triage).
 | `factory:review`     | PR open (`Closes #N`), QA approved     | orchestrator |
 | `factory:failed`     | attempts/budget exhausted; see comment | orchestrator |
 | `factory:budget-N`   | per-issue budget override ($N)         | human only   |
+| `factory:fresh`      | one-shot: discard branch/worktree/plan, restart from origin/HEAD | human only (stripped after reset) |
 
 - Claim = remove `ready`, add `wip`, self-assign, comment the plan — the
   first write the orchestrator makes for an issue.
