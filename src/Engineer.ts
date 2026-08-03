@@ -280,6 +280,10 @@ export const runIssue = (
           chatPerTask: true,
           checkoutBranch: false,
           system: [noopRule, handbook.trim()].filter((part) => part.length > 0).join("\n\n"),
+          // QA and the CI gate re-judge the final state, so an unconfirmed
+          // no-op task completes with a notice instead of sinking the run
+          // (this exact failure burned three attempts on one issue).
+          noopTaskPolicy: "complete",
           maxRounds: 3,
           ...(gate === undefined || gate.length === 0
             ? {}
