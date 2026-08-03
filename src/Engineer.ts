@@ -440,6 +440,21 @@ export const runIssue = (
     if (final === "Shipped") {
       const invoice = renderInvoice(cells, budgetUsd)
       const summary = yield* Ref.get(qaSummary)
+      // PR context is assembled deterministically: completed plan tasks,
+      // the branch's commits and file stat vs origin/HEAD, and the gate.
+      const persisted = yield* Effect.orElseSucceed(store.load(planPath), () => undefined)
+      const taskTitles =
+        persisted === undefined
+          ? []
+          : persisted.tasks.filter((task) => task.completed).map((task) => task.title)
+      const commits = yield* Effect.orElseSucceed(
+        run(["git", "-C", worktree, "log", "--oneline", "origin/HEAD..HEAD"], workspaceDir),
+        () => ""
+      )
+      const filesChanged = yield* Effect.orElseSucceed(
+        run(["git", "-C", worktree, "diff", "--stat", "origin/HEAD...HEAD"], workspaceDir),
+        () => ""
+      )
       // PR creation runs gh in the worktree so the head branch is inferred
       // from the issue's own checkout, not the daemon's.
       const worktreeGh = makeGitHubTool(nodeProcessExecutor, worktree, events)
@@ -447,7 +462,14 @@ export const runIssue = (
         Effect.gen(function* () {
           const pr = yield* worktreeGh.createPr(
             intent.issue.title,
-            prBody(intent.issue, summary, invoice)
+            prBody(intent.issue, {
+              qaSummary: summary,
+              taskTitles,
+              commits,
+              filesChanged,
+              gateCommand: gate,
+              invoice
+            })
           )
           yield* events.publish(Info.make({ message: `opened ${pr.url}` }))
         })

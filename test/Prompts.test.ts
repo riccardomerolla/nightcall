@@ -86,10 +86,31 @@ describe("Prompts", () => {
     assert.include(invoice, "Total: $1.0000 of $5.00 budget.")
     assert.include(renderInvoice([], 5), "(no usage reported)")
 
-    const body = prBody(issue, "Solid change.", invoice)
-    assert.include(body, "Closes #7.")
+    const body = prBody(issue, {
+      qaSummary: "Solid change.",
+      taskTitles: ["Add kebabCase", "Cover kebabCase with tests"],
+      commits: "abc123 add kebabCase",
+      filesChanged: "src/strcase.js | 10 ++++",
+      gateCommand: "npm run gate",
+      invoice
+    })
+    assert.include(body, "Closes #7 — Add a --version flag.")
+    assert.include(body, "- Add kebabCase")
+    assert.include(body, "abc123 add kebabCase")
+    assert.include(body, "`npm run gate`")
     assert.include(body, "Solid change.")
     assert.include(body, "### Invoice")
+
+    const sparse = prBody(issue, {
+      qaSummary: "",
+      taskTitles: [],
+      commits: "",
+      filesChanged: "",
+      gateCommand: undefined,
+      invoice
+    })
+    assert.include(sparse, "approved without additional notes.")
+    assert.include(sparse, "PR CI is the gate.")
   })
 
   it("parses epic decomposition replies into children", () => {

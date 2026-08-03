@@ -238,12 +238,42 @@ export const renderInvoice = (
   ].join("\n")
 }
 
-export const prBody = (issue: IssueSummary, qaSummary: string, invoice: string): string =>
+export interface PrContext {
+  readonly qaSummary: string
+  readonly taskTitles: ReadonlyArray<string>
+  readonly commits: string
+  readonly filesChanged: string
+  readonly gateCommand: string | undefined
+  readonly invoice: string
+}
+
+// The PR body must stand alone for a reviewer who has not read the issue
+// thread: what was asked, what was done, and how it was verified — built
+// deterministically from the plan, the git history, and the gate, so a
+// terse QA reply can never leave the PR empty.
+export const prBody = (issue: IssueSummary, context: PrContext): string =>
   [
-    `Closes #${issue.number}.`,
+    `Closes #${issue.number} — ${issue.title}.`,
     "",
-    "QA review:",
-    qaSummary.trim().length === 0 ? "(approved without notes)" : qaSummary,
+    "## What changed",
+    ...(context.taskTitles.length === 0
+      ? ["(see commits)"]
+      : context.taskTitles.map((title) => `- ${title}`)),
     "",
-    invoice
+    "## Commits",
+    context.commits.trim().length === 0 ? "(none listed)" : context.commits,
+    "",
+    "## Files",
+    context.filesChanged.trim().length === 0 ? "(none listed)" : context.filesChanged,
+    "",
+    "## Verification",
+    context.gateCommand === undefined || context.gateCommand.length === 0
+      ? "- Gate: not configured for this run; PR CI is the gate."
+      : `- Gate green before review: \`${context.gateCommand}\``,
+    "- QA (fresh-context review of the full diff): " +
+      (context.qaSummary.trim().length === 0
+        ? "approved without additional notes."
+        : context.qaSummary.trim()),
+    "",
+    context.invoice
   ].join("\n")
