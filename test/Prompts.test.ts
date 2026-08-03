@@ -46,6 +46,18 @@ describe("Prompts", () => {
       approved: false,
       findings: "The error type is wrong."
     })
+    // Same-line findings after an em-dash (the codex house style).
+    assert.deepStrictEqual(
+      parseQa("VERDICT: REJECT — The dashboard fetches fixtures the diff does not publish."),
+      {
+        approved: false,
+        findings: "The dashboard fetches fixtures the diff does not publish."
+      }
+    )
+    assert.strictEqual(
+      parseQa("VERDICT: APPROVE — clean, well-tested change.")?.findings,
+      "clean, well-tested change."
+    )
     assert.isUndefined(parseQa("VERDICT: REJECT"))
     assert.isUndefined(parseQa("ship it"))
   })

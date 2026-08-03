@@ -350,10 +350,19 @@ export const runIssue = (
         const base = yield* context.git.defaultBase
         const diff = yield* context.git.diffVsBase(base, true)
         const qa = yield* makeChat(context.reasoning, { events: context.events, agent: "qa" })
+        // QA sees the tracked-file listing so it never rejects for assets
+        // that already exist outside the diff (trust-bar false positive on
+        // the fixtures the seed committed).
+        const repoFiles = yield* Effect.orElseSucceed(
+          run(["git", "-C", worktree, "ls-files"], workspaceDir).pipe(
+            Effect.map((listing) => listing.split("\n").slice(0, 400).join("\n"))
+          ),
+          () => ""
+        )
         const reply =
           diff.trim().length === 0
             ? undefined
-            : yield* qa.ask(qaPrompt(intent.issue, criteria, diff))
+            : yield* qa.ask(qaPrompt(intent.issue, criteria, diff, repoFiles))
         const verdict =
           reply === undefined
             ? { approved: false, findings: "The change produced an empty diff." }

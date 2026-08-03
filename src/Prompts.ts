@@ -62,8 +62,13 @@ const verdictRest = (reply: string, verdict: string): string | undefined => {
   if (index === -1) {
     return undefined
   }
+  // Payload priority: same line after the verdict token ("VERDICT: REJECT
+  // — findings…"), then the lines after, then the lines before.
+  const verdictLine = lines[index]?.replace(/[*_#>`]/g, "").trim() ?? ""
+  const sameLine = verdictLine.slice(verdict.length).replace(/^[\s—–:.,-]+/, "").trim()
   const after = lines.slice(index + 1).join("\n").trim()
-  return after.length > 0 ? after : lines.slice(0, index).join("\n").trim()
+  const rest = [sameLine, after].filter((part) => part.length > 0).join("\n")
+  return rest.length > 0 ? rest : lines.slice(0, index).join("\n").trim()
 }
 
 export const parseTriage = (reply: string): Triage | undefined => {
@@ -171,20 +176,31 @@ export interface QaVerdict {
   readonly findings: string
 }
 
-export const qaPrompt = (issue: IssueSummary, criteria: string, diff: string): string =>
+export const qaPrompt = (
+  issue: IssueSummary,
+  criteria: string,
+  diff: string,
+  repoFiles = ""
+): string =>
   [
     harnessPreamble,
     "",
     "You are the QA reviewer of a small software company, seeing this",
     "change for the first time. Review the diff against the issue and the",
     "acceptance criteria. Judge correctness and scope only — style nits",
-    "are not rejection grounds.",
+    "are not rejection grounds. The diff applies on top of the existing",
+    "repository: files in the listing below already exist even when the",
+    "diff does not touch them — never reject for something the listing",
+    "already provides.",
     "",
     `Issue #${issue.number}: ${issue.title}`,
     "",
     "Acceptance criteria:",
     criteria.trim().length === 0 ? "(none beyond the issue text)" : criteria,
     "",
+    ...(repoFiles.trim().length === 0
+      ? []
+      : ["Repository files (tracked, for context):", "```", repoFiles.trim(), "```", ""]),
     "Diff:",
     "```diff",
     diff,
