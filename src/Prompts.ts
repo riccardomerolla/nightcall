@@ -51,13 +51,19 @@ export const triagePrompt = (issue: IssueSummary): string =>
 
 // Emphasis-tolerant: models bold or heading-ify the verdict line
 // ("**VERDICT: APPROVE**", "## Verdict: reject"), so markdown decoration
-// is stripped before matching.
+// is stripped before matching. Order-tolerant: some models write their
+// reasoning first and the verdict last, so when nothing follows the
+// verdict line the text before it is the payload.
 const verdictRest = (reply: string, verdict: string): string | undefined => {
   const lines = reply.split(/\r?\n/)
   const index = lines.findIndex((line) =>
     line.replace(/[*_#>`]/g, "").trim().toUpperCase().startsWith(verdict)
   )
-  return index === -1 ? undefined : lines.slice(index + 1).join("\n").trim()
+  if (index === -1) {
+    return undefined
+  }
+  const after = lines.slice(index + 1).join("\n").trim()
+  return after.length > 0 ? after : lines.slice(0, index).join("\n").trim()
 }
 
 export const parseTriage = (reply: string): Triage | undefined => {
@@ -188,7 +194,11 @@ export const parseQa = (reply: string): QaVerdict | undefined => {
     return { approved: true, findings: approve }
   }
   const reject = verdictRest(reply, "VERDICT: REJECT")
-  return reject === undefined ? undefined : { approved: false, findings: reject }
+  // A rejection with no findings is unactionable — treat it as no verdict
+  // so the failure carries the raw reply for autopsy instead of nothing.
+  return reject === undefined || reject.length === 0
+    ? undefined
+    : { approved: false, findings: reject }
 }
 
 const cost = (cell: CostCell): number => cell.costUsd ?? 0

@@ -40,6 +40,13 @@ describe("Prompts", () => {
     assert.strictEqual(parseQa("**VERDICT: APPROVE**\nSolid.")?.approved, true)
     assert.strictEqual(parseQa("## Verdict: reject\nNo tests.")?.approved, false)
     assert.strictEqual(parseTriage("**VERDICT: ACCEPT**\n- criteria")?.kind, "Accept")
+    // Findings-first replies keep their payload; findings-free rejections
+    // are no verdict at all.
+    assert.deepStrictEqual(parseQa("The error type is wrong.\nVERDICT: REJECT"), {
+      approved: false,
+      findings: "The error type is wrong."
+    })
+    assert.isUndefined(parseQa("VERDICT: REJECT"))
     assert.isUndefined(parseQa("ship it"))
   })
 
