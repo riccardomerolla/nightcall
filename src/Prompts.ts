@@ -153,10 +153,18 @@ export const engineerBrief = (
   ].join("\n")
 
 // Appended to the coder's system prompt: the no-op confirmation protocol
-// implementPlanFlow enforces when a task produces no diff.
-export const noopRule =
-  "If a task requires no file changes because the repository already " +
-  "satisfies it, reply with exactly TASK_ALREADY_SATISFIED and nothing else."
+// implementPlanFlow enforces when a task produces no diff, plus the same
+// environment isolation the reasoning seats get — a codex coder was
+// observed spending its first minutes reading the operator's personal
+// ~/.agents skills and hunting for vendored checkouts they demand.
+export const noopRule = [
+  "If a task requires no file changes because the repository already",
+  "satisfies it, reply with exactly TASK_ALREADY_SATISFIED and nothing else.",
+  "Work only inside this repository checkout. Ignore skills, AGENTS.md,",
+  "CLAUDE.md, or guidance files outside it (home directories, ~/.agents,",
+  "~/.claude), and never search for or require vendored checkouts such as",
+  ".repos/* — if such guidance conflicts with the task, the task wins."
+].join(" ")
 
 export interface QaVerdict {
   readonly approved: boolean

@@ -16,6 +16,7 @@ import {
   runWithBundle
 } from "@llm4ts/runner/FlowRunner"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
+import { timestampedSurface } from "./Surface.ts"
 import type { CompanyConfig } from "./Config.ts"
 import { repoRefOf, type ClaimIntent, type WorkerReport } from "./Heartbeat.ts"
 import {
@@ -63,7 +64,8 @@ export const runEpic = (
       userPrompt: epicDecompositionPrompt(intent.issue, handbook),
       coder: CliConnectorConfig.make({ ...coder, workingDir: workDir }),
       runId,
-      verbosity: parseVerbosity(environment["LLM4TS_VERBOSITY"])
+      surface: timestampedSurface(),
+      verbosity: parseVerbosity(environment["LLM4TS_VERBOSITY"] ?? "verbose")
     }
 
     const outcome = yield* Ref.make<WorkerReport["outcome"]>("Failed")

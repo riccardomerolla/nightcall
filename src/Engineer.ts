@@ -25,6 +25,7 @@ import {
 import { nodePlainFileStore } from "@llm4ts/runner/NodePlainFileStore"
 import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
+import { timestampedSurface } from "./Surface.ts"
 import type { CompanyConfig } from "./Config.ts"
 import { repoRefOf, type ClaimIntent } from "./Heartbeat.ts"
 import { makeProgressEvents } from "./Progress.ts"
@@ -270,7 +271,8 @@ export const runIssue = (
       coder: CliConnectorConfig.make({ ...coder, workingDir: worktree }),
       tracePath: join(stateDir, `trace-${runId}.jsonl`),
       runId,
-      verbosity: parseVerbosity(environment["LLM4TS_VERBOSITY"]),
+      surface: timestampedSurface(),
+      verbosity: parseVerbosity(environment["LLM4TS_VERBOSITY"] ?? "verbose"),
       budget: CostBudget.make({ maximumCostUsd: budgetUsd })
     }
 
