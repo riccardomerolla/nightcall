@@ -241,20 +241,29 @@ export const runStage = (
             })
             yield* store.save(planPath, persisted)
           }
+        }
+        // Human guidance becomes a task on EVERY round — a CEO steering a
+        // mid-plan issue must not be ignored until the plan completes.
+        // Deduped: skip when the newest guidance already has its task.
+        {
           const comments = yield* context.hosting
             .readIssueComments(ref)
             .pipe(Effect.orElseSucceed(() => []))
           const guidance = guidanceSince(comments, signature)
-          if (guidance.length > 0) {
+          const guidanceText = guidance
+            .map((entry) => `${entry.author}: ${entry.body}`)
+            .join("\n\n")
+          const alreadyTasked = persisted.tasks.some(
+            (task) => task.description === guidanceText
+          )
+          if (guidance.length > 0 && !alreadyTasked) {
             persisted = Plan.make({
               epicId: persisted.epicId,
               tasks: [
                 ...persisted.tasks,
                 Task.make({
                   title: "Apply CEO guidance",
-                  description: guidance
-                    .map((entry) => `${entry.author}: ${entry.body}`)
-                    .join("\n\n")
+                  description: guidanceText
                 })
               ],
               ...(persisted.brief === undefined ? {} : { brief: persisted.brief })
