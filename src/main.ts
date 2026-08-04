@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect"
 import * as Schedule from "effect/Schedule"
 import * as Semaphore from "effect/Semaphore"
 import type { FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import { makeGitHubTool, parseIssueRef } from "@llm4ts/flow/GitHubTool"
+import { RepoRef, makeGitHubTool, parseIssueRef } from "@llm4ts/flow/GitHubTool"
 import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { configFromEnv } from "./Config.ts"
 import { runIssue } from "./Engineer.ts"
@@ -41,6 +41,29 @@ const program = Effect.gen(function* () {
     (stage: Exclude<Stage, "mend">) =>
     (intent: ClaimIntent): Effect.Effect<WorkerReport> =>
       runStage(stage, gh, intent, config, process.env, loggingEvents, gitLock)
+  // Restart reconciliation (DESIGN.md): a fresh daemon has no work in
+  // flight, so any factory:wip at boot is a stale claim from a killed
+  // process. Strip it — the stage checkpoint labels remain, so each issue
+  // is re-claimed at the stage it was interrupted in and resumes from its
+  // persisted plan and branch.
+  yield* Effect.forEach(config.targets, (target) =>
+    Effect.gen(function* () {
+      const repo = RepoRef.make({ owner: target.owner, repo: target.repo })
+      const stale = yield* gh.listIssues(repo, { labels: ["factory:wip"] }).pipe(
+        Effect.orElseSucceed(() => [])
+      )
+      yield* Effect.forEach(stale, (issue) =>
+        Effect.gen(function* () {
+          yield* Effect.ignore(
+            gh.editIssueLabels(issue.ref(repo), [], ["factory:wip"])
+          )
+          yield* Effect.log(
+            `reconciled stale factory:wip on ${target.slug}#${issue.number}; it resumes at its checkpoint`
+          )
+        })
+      )
+    })
+  )
   const beat = heartbeat(gh, config, loggingEvents, {
     claimMode,
     worker: (intent) => runIssue(gh, intent, config, process.env, loggingEvents),
