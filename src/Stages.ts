@@ -43,6 +43,7 @@ import { loadCommentRef, makeChecklistEvents, renderChecklist, saveCommentRef } 
 import { makeProgressEvents } from "./Progress.ts"
 import {
   engineerBrief,
+  guidanceSince,
   isEpicChild,
   noopRule,
   parseQa,
@@ -65,6 +66,7 @@ import {
   doneReview,
   fail,
   isFresh,
+  signature,
   signed
 } from "./Protocol.ts"
 import { timestampedSurface } from "./Surface.ts"
@@ -196,7 +198,7 @@ export const runStage = (
 
     const codeBody = (context: FlowContextShape): Effect.Effect<void, FlowError> =>
       Effect.gen(function* () {
-        const persisted = yield* store.load(planPath)
+        let persisted = yield* store.load(planPath)
         if (persisted === undefined) {
           return yield* Effect.fail(
             ProcessError.make({
@@ -204,6 +206,31 @@ export const runStage = (
               detail: "no persisted plan for this issue; run the plan stage first"
             })
           )
+        }
+        // A plan with nothing left to do means this round exists because a
+        // human sent the issue back (post-escalation guidance): their
+        // comments since Nightcall's last report become the round's task.
+        if (pruneNonCodingTasks(persisted).nextIncomplete === undefined) {
+          const comments = yield* context.hosting
+            .readIssueComments(ref)
+            .pipe(Effect.orElseSucceed(() => []))
+          const guidance = guidanceSince(comments, signature)
+          if (guidance.length > 0) {
+            persisted = Plan.make({
+              epicId: persisted.epicId,
+              tasks: [
+                ...persisted.tasks,
+                Task.make({
+                  title: "Apply CEO guidance",
+                  description: guidance
+                    .map((entry) => `${entry.author}: ${entry.body}`)
+                    .join("\n\n")
+                })
+              ],
+              ...(persisted.brief === undefined ? {} : { brief: persisted.brief })
+            })
+            yield* store.save(planPath, persisted)
+          }
         }
         // Prefer the living checklist (edit the plan comment as tasks
         // complete); fall back to per-task tick comments when the plan
@@ -325,12 +352,35 @@ export const runStage = (
         if (verdict.kind === "Reject") {
           const attempt = attemptOf(intent.issue.labels) + 1
           if (attemptOf(intent.issue.labels) >= config.maxAttempts) {
-            return yield* Effect.fail(
-              ProcessError.make({
-                message: "qa review",
-                detail: `QA rejected the change after ${config.maxAttempts} iteration(s):\n${verdict.findings}`
-              })
+            // Ask for help instead of failing: the engineer's rounds are not
+            // converging, so the issue parks at needs-info with a full
+            // account and the CEO's options. Guidance comments feed the next
+            // round's plan (see the code stage).
+            yield* context.hosting.writeIssueComment(
+              ref,
+              signed(
+                [
+                  `This issue is stuck: QA has rejected ${attempt} round(s) of fixes`,
+                  "and the engineer is not converging. Latest findings:",
+                  "",
+                  verdict.findings,
+                  "",
+                  `The work so far is on branch \`${branch}\`.`,
+                  "",
+                  "How should we proceed? Your moves:",
+                  "- Reply with guidance as a comment, then add `factory:planned`",
+                  "  — the engineer runs another round applying your guidance.",
+                  "- Take the branch over manually, or close this issue."
+                ].join("\n")
+              )
             )
+            yield* context.hosting.editIssueLabels(
+              ref,
+              [Labels.needsInfo],
+              [Labels.wip, Labels.reviewed]
+            )
+            yield* Ref.set(outcome, "Bounced")
+            return
           }
           // Findings become a plan task and the issue loops back through
           // code → review → QA — the iteration the org chart promised.

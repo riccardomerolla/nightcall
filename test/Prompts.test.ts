@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { CostCell } from "@llm4ts/flow/CostLedger"
 import { IssueSummary } from "@llm4ts/flow/GitHubTool"
 import {
+  guidanceSince,
   isEpicChild,
   parseEpicChildren,
   parseQa,
@@ -151,6 +152,22 @@ describe("Prompts", () => {
     assert.isTrue(isEpicChild("Do the thing.\n\nParent: #11 (epic)"))
     assert.isFalse(isEpicChild("Do the thing. See #11."))
     assert.deepStrictEqual([...bounce.remove], [Labels.ready, Labels.wip])
+  })
+
+  it("extracts CEO guidance after the last signed report", () => {
+    const comments = [
+      { author: "bot", body: "Claimed.\n\n— Nightcall 🌙" },
+      { author: "ceo", body: "old note" },
+      { author: "bot", body: "This issue is stuck...\n\n— Nightcall 🌙" },
+      { author: "ceo", body: "Migrate ALL chart rules before deleting the file." },
+      { author: "ceo", body: "Keep dark mode intact." }
+    ]
+    const guidance = guidanceSince(comments, "— Nightcall 🌙")
+    assert.deepStrictEqual(
+      guidance.map((entry) => entry.body),
+      ["Migrate ALL chart rules before deleting the file.", "Keep dark mode intact."]
+    )
+    assert.deepStrictEqual(guidanceSince([], "— Nightcall 🌙"), [])
   })
 
   it("derives epic children status from the parent marker", () => {

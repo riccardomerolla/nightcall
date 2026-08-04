@@ -258,6 +258,21 @@ export const parseQa = (reply: string): QaVerdict | undefined => {
     : { kind: "Reject", findings: reject }
 }
 
+// Comments the humans wrote after Nightcall's last signed report — the
+// CEO's guidance for a stuck issue's next round.
+export const guidanceSince = (
+  comments: ReadonlyArray<{ readonly author: string; readonly body: string }>,
+  reportSignature: string
+): ReadonlyArray<{ readonly author: string; readonly body: string }> => {
+  const lastSigned = comments.reduce(
+    (last, comment, index) => (comment.body.includes(reportSignature) ? index : last),
+    -1
+  )
+  return comments
+    .slice(lastSigned + 1)
+    .filter((comment) => !comment.body.includes(reportSignature))
+}
+
 const cost = (cell: CostCell): number => cell.costUsd ?? 0
 
 export const renderInvoice = (
