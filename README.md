@@ -43,6 +43,7 @@ default `claude`) and `gh` is authenticated.
 | `NIGHTCALL_TURN_LIMIT` | `50` | coder turns per task |
 | `NIGHTCALL_ISSUE_TIMEOUT_MINUTES` | `30` | wall clock per issue (mono) or per stage (staged) |
 | `NIGHTCALL_AUTO_MERGE` | on | `off` restores the human merge gate; otherwise the mend stage squash-merges a factory:review PR the moment its checks are green (continuous delivery) |
+| `NIGHTCALL_CODER_MODEL` | (connector default) | model for every seat, e.g. `claude-sonnet-5` |
 
 ## Status
 

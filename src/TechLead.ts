@@ -9,7 +9,7 @@ import type { FlowContextShape } from "@llm4ts/flow/FlowContext"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import type { GitHubToolShape } from "@llm4ts/flow/GitHubTool"
-import { coderFromEnv } from "@llm4ts/runner/Connectors"
+import { companyCoder } from "./Engineer.ts"
 import {
   makeFlowRunnerContext,
   nodeFlowRunnerDependencies,
@@ -79,7 +79,7 @@ export const runEpic = (
     const startedAtMs = yield* Clock.currentTimeMillis
     const runId = `nightcall-epic-${intent.issue.number}-${startedAtMs}`
     const dependencies = nodeFlowRunnerDependencies()
-    const coder = coderFromEnv(environment)
+    const coder = companyCoder(environment)
     const workDir = process.cwd()
     const options = {
       workDir,

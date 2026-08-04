@@ -28,6 +28,7 @@ import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
 import type { CompanyConfig } from "./Config.ts"
 import {
+  companyCoder,
   ensureWorktree,
   issuePaths,
   positiveIntOr,
@@ -125,7 +126,7 @@ export const runStage = (
     const runId = `nightcall-${stage}-${intent.issue.number}-${startedAtMs}`
     const store = makePlanStore(nodePlainFileStore)
     const dependencies = nodeFlowRunnerDependencies()
-    const coder = withTurnLimit(coderFromEnv(environment), turnLimit)
+    const coder = withTurnLimit(companyCoder(environment), turnLimit)
     const options = {
       workDir: worktree,
       workspace: worktree,
@@ -716,7 +717,7 @@ export const runMend = (
       // markers, then continue the rebase — one round per conflicted commit.
       const startedAtMs = yield* Clock.currentTimeMillis
       const coder = withTurnLimit(
-        coderFromEnv(environment),
+        companyCoder(environment),
         positiveIntOr(environment["NIGHTCALL_TURN_LIMIT"], 50)
       )
       const options = {

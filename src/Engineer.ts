@@ -105,6 +105,19 @@ export const pruneNonCodingTasks = (plan: Plan): Plan => {
       })
 }
 
+// The company's coder casting in one place: connector from LLM4TS_CODER
+// (default claude), model override from NIGHTCALL_CODER_MODEL (e.g.
+// claude-sonnet-5, or CLI aliases like sonnet/opus).
+export const companyCoder = (
+  environment: Readonly<Record<string, string | undefined>>
+): CliConnectorConfig => {
+  const base = coderFromEnv(environment)
+  const model = environment["NIGHTCALL_CODER_MODEL"]?.trim()
+  return model === undefined || model.length === 0
+    ? base
+    : CliConnectorConfig.make({ ...base, model })
+}
+
 export const positiveIntOr = (raw: string | undefined, fallback: number): number => {
   const parsed = raw === undefined ? Number.NaN : Number(raw)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
@@ -274,7 +287,7 @@ export const runIssue = (
     const maxRounds = positiveIntOr(environment["NIGHTCALL_MAX_ROUNDS"], 1)
     const internalReview = environment["NIGHTCALL_INTERNAL_REVIEW"] !== "off"
     const timeoutMinutes = positiveIntOr(environment["NIGHTCALL_ISSUE_TIMEOUT_MINUTES"], 30)
-    const coder = withTurnLimit(coderFromEnv(environment), turnLimit)
+    const coder = withTurnLimit(companyCoder(environment), turnLimit)
     const options = {
       workDir: worktree,
       workspace: worktree,
