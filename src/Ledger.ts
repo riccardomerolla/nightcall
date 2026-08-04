@@ -12,7 +12,7 @@ export class LedgerEntry extends Schema.Class<LedgerEntry>("LedgerEntry")({
   at: Schema.String,
   target: Schema.String,
   issue: Schema.Int,
-  outcome: Schema.Literals(["Shipped", "Bounced", "Failed"]),
+  outcome: Schema.Literals(["Shipped", "Bounced", "Failed", "Advanced"]),
   costUsd: Schema.Number
 }) {}
 

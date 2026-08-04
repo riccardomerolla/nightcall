@@ -28,6 +28,8 @@ const config = CompanyConfig.make({
   engineerParallelism: 1
 })
 
+const empty = { planned: [], coded: [], reviewed: [] }
+
 const summary = (number: number, labels: ReadonlyArray<string>): IssueSummary =>
   IssueSummary.make({
     number,
@@ -45,7 +47,7 @@ describe("Heartbeat", () => {
       summary(3, [Labels.ready]),
       summary(5, [Labels.ready, Labels.epic])
     ]
-    const idle = decide([{ target, ready, wip: [] }], config)
+    const idle = decide([{ target, ready, wip: [], ...empty }], config)
     assert.deepStrictEqual(
       idle.claims.map((intent) => intent.issue.number),
       [3]
@@ -55,21 +57,136 @@ describe("Heartbeat", () => {
       [5]
     )
 
-    const busy = decide([{ target, ready, wip: [summary(1, [Labels.wip])] }], config)
+    const busy = decide([{ target, ready, wip: [summary(1, [Labels.wip])], ...empty }], config)
     assert.deepStrictEqual(busy.claims, [])
     assert.strictEqual(busy.inFlight, 1)
   })
 
   it("decide stops claiming when today's spend exhausts the daily budget", () => {
     const ready = [summary(3, [Labels.ready])]
-    const throttled = decide([{ target, ready, wip: [] }], config, 25)
+    const throttled = decide([{ target, ready, wip: [], ...empty }], config, 25)
     assert.isTrue(throttled.throttled)
     assert.deepStrictEqual(throttled.claims, [])
     assert.deepStrictEqual(throttled.epics, [])
-    const underBudget = decide([{ target, ready, wip: [] }], config, 24.99)
+    const underBudget = decide([{ target, ready, wip: [], ...empty }], config, 24.99)
     assert.isFalse(underBudget.throttled)
     assert.strictEqual(underBudget.claims.length, 1)
   })
+
+  it("decide assigns one intent per stage from the checkpoint labels", () => {
+    const snapshots = [
+      {
+        target,
+        ready: [summary(30, [Labels.ready])],
+        wip: [],
+        planned: [summary(31, [Labels.planned]), summary(32, [Labels.planned])],
+        coded: [summary(33, [Labels.coded])],
+        reviewed: [summary(34, [Labels.reviewed])]
+      }
+    ]
+    const decision = decide(snapshots, config)
+    assert.deepStrictEqual(
+      decision.stages.plan.map((intent) => intent.issue.number),
+      [30]
+    )
+    // Code-stage cap is engineerParallelism (1): oldest planned issue only.
+    assert.deepStrictEqual(
+      decision.stages.code.map((intent) => intent.issue.number),
+      [31]
+    )
+    assert.deepStrictEqual(
+      decision.stages.review.map((intent) => intent.issue.number),
+      [33]
+    )
+    assert.deepStrictEqual(
+      decision.stages.qa.map((intent) => intent.issue.number),
+      [34]
+    )
+    const throttled = decide(snapshots, config, 25)
+    assert.deepStrictEqual(throttled.stages.code, [])
+    assert.deepStrictEqual(throttled.stages.qa, [])
+  })
+
+  it.effect("staged mode runs each stage worker on its claimed issue", () =>
+    Effect.gen(function* () {
+      const repo = repoRefOf(target)
+      const listJson = (issues: string): ProcessResult =>
+        ProcessResult.make({ stdout: [issues], exitCode: 0 })
+      const row = (number: number, label: string): string =>
+        `{"number":${number},"title":"T${number}","body":"B","author":{"login":"ceo"},` +
+        `"labels":[{"name":"${label}"}],"updatedAt":"2026-07-31T00:00:00Z"}`
+      const ok = ProcessResult.make({ stdout: [], exitCode: 0 })
+      const fake = yield* makeFakeProcessExecutor({
+        responses: new Map([
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.ready] })]),
+            listJson("[]")
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.wip] })]),
+            listJson("[]")
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.planned] })]),
+            listJson(`[${row(41, Labels.planned)}]`)
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.coded] })]),
+            listJson(`[${row(42, Labels.coded)}]`)
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.reviewed] })]),
+            listJson(`[${row(43, Labels.reviewed)}]`)
+          ],
+          [
+            processCommandKey([
+              "gh",
+              ...issueEditLabelsArgs(summary(41, []).ref(repo), [Labels.wip], [])
+            ]),
+            ok
+          ],
+          [
+            processCommandKey([
+              "gh",
+              ...issueEditLabelsArgs(summary(42, []).ref(repo), [Labels.wip], [])
+            ]),
+            ok
+          ],
+          [
+            processCommandKey([
+              "gh",
+              ...issueEditLabelsArgs(summary(43, []).ref(repo), [Labels.wip], [])
+            ]),
+            ok
+          ]
+        ])
+      })
+      const events = yield* makeCollectingFlowEvents
+      const gh = makeGitHubTool(fake.executor, "/anywhere", events)
+      const ran: Array<string> = []
+      const stageWorker =
+        (stage: string) =>
+        (intent: { issue: { number: number } }): Effect.Effect<{
+          outcome: "Shipped" | "Bounced" | "Failed" | "Advanced"
+          costUsd: number
+        }> =>
+          Effect.sync(() => {
+            ran.push(`${stage}:${intent.issue.number}`)
+            return { outcome: "Advanced" as const, costUsd: 0.1 }
+          })
+
+      yield* heartbeat(gh, config, events, {
+        claimMode: true,
+        stageWorkers: {
+          plan: stageWorker("plan"),
+          code: stageWorker("code"),
+          review: stageWorker("review"),
+          qa: stageWorker("qa")
+        }
+      })
+      assert.deepStrictEqual([...ran].sort(), ["code:41", "qa:43", "review:42"])
+    })
+  )
 
   it.effect("claims via gh in claim mode and stays read-only in observe mode", () =>
     Effect.gen(function* () {
@@ -92,6 +209,18 @@ describe("Heartbeat", () => {
           ],
           [
             processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.wip] })]),
+            listJson("[]")
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.planned] })]),
+            listJson("[]")
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.coded] })]),
+            listJson("[]")
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.reviewed] })]),
             listJson("[]")
           ],
           [
@@ -128,7 +257,7 @@ describe("Heartbeat", () => {
       assert.deepStrictEqual(epicReports, [5])
 
       assert.strictEqual(observed.claims.length, 1)
-      assert.strictEqual(readOnlyCalls, 2)
+      assert.strictEqual(readOnlyCalls, 5)
       assert.strictEqual(claimed.claims.length, 1)
       const issue = summary(3, [Labels.ready]).ref(repo)
       const editKey = processCommandKey([

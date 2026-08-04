@@ -37,6 +37,11 @@ default `claude`) and `gh` is authenticated.
 | `NIGHTCALL_WORKSPACE` | `.factory` | clones, worktrees, and the ledger |
 | `NIGHTCALL_GATE` | (unset) | CI gate command run in the worktree |
 | `NIGHTCALL_STANDUP_ISSUE` | (unset) | `owner/repo#N` — standup comments land here |
+| `NIGHTCALL_PIPELINE` | `mono` | `staged` splits work into plan → code → review → QA stage workers that run concurrently across issues (one issue per stage per beat); each stage is independently retryable and hands off via `factory:planned` / `factory:coded` / `factory:reviewed` |
+| `NIGHTCALL_MAX_ROUNDS` | `1` | internal review rounds per task |
+| `NIGHTCALL_INTERNAL_REVIEW` | on | `off` skips internal reviewer seats (gate stays) |
+| `NIGHTCALL_TURN_LIMIT` | `50` | coder turns per task |
+| `NIGHTCALL_ISSUE_TIMEOUT_MINUTES` | `30` | wall clock per issue (mono) or per stage (staged) |
 
 ## Status
 

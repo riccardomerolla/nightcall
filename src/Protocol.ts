@@ -16,7 +16,13 @@ export const Labels = {
   // prior state for the issue (worktree, persisted plan, branch — local
   // and remote) and start from a brand-new branch off origin/HEAD. The
   // orchestrator strips it once the reset is applied.
-  fresh: "factory:fresh"
+  fresh: "factory:fresh",
+  // Staged-pipeline checkpoints (orchestrator-owned). An issue sits at
+  // exactly one of these between stage runs; wip marks a stage worker on
+  // it right now. ready → planned → coded → reviewed → review.
+  planned: "factory:planned",
+  coded: "factory:coded",
+  reviewed: "factory:reviewed"
 } as const
 
 export const budgetLabelPrefix = "factory:budget-"
@@ -25,6 +31,9 @@ export const IssuePhase = Schema.Literals([
   "Ready",
   "NeedsInfo",
   "InProgress",
+  "Planned",
+  "Coded",
+  "Reviewed",
   "InReview",
   "Failed",
   "Unmanaged"
@@ -32,7 +41,8 @@ export const IssuePhase = Schema.Literals([
 export type IssuePhase = typeof IssuePhase.Type
 
 // Precedence resolves contradictory label sets left over from partial
-// writes: a terminal or in-flight marker outranks readiness.
+// writes: a terminal or in-flight marker outranks stage checkpoints,
+// which outrank readiness.
 export const phaseOf = (labels: ReadonlyArray<string>): IssuePhase => {
   const has = (label: string): boolean => labels.includes(label)
   return has(Labels.failed)
@@ -41,11 +51,17 @@ export const phaseOf = (labels: ReadonlyArray<string>): IssuePhase => {
       ? "InReview"
       : has(Labels.wip)
         ? "InProgress"
-        : has(Labels.needsInfo)
-          ? "NeedsInfo"
-          : has(Labels.ready)
-            ? "Ready"
-            : "Unmanaged"
+        : has(Labels.reviewed)
+          ? "Reviewed"
+          : has(Labels.coded)
+            ? "Coded"
+            : has(Labels.planned)
+              ? "Planned"
+              : has(Labels.needsInfo)
+                ? "NeedsInfo"
+                : has(Labels.ready)
+                  ? "Ready"
+                  : "Unmanaged"
 }
 
 export const isEpic = (labels: ReadonlyArray<string>): boolean => labels.includes(Labels.epic)
@@ -69,6 +85,26 @@ export class Transition extends Schema.Class<Transition>("Transition")({
 }) {}
 
 export const claim = Transition.make({ add: [Labels.wip], remove: [Labels.ready] })
+// Staged pipeline: a stage worker marks wip while running, then swaps the
+// checkpoint on success. Failure removes only wip (Engineer adds failed),
+// keeping the checkpoint so a retry resumes at the same stage.
+export const stageClaim = Transition.make({ add: [Labels.wip], remove: [] })
+export const donePlan = Transition.make({
+  add: [Labels.planned],
+  remove: [Labels.wip, Labels.ready]
+})
+export const doneCode = Transition.make({
+  add: [Labels.coded],
+  remove: [Labels.wip, Labels.planned]
+})
+export const doneReview = Transition.make({
+  add: [Labels.reviewed],
+  remove: [Labels.wip, Labels.coded]
+})
+export const doneQa = Transition.make({
+  add: [Labels.review],
+  remove: [Labels.wip, Labels.reviewed]
+})
 // Bounce can happen before a claim (epic triage) or after one (engineer
 // pipeline), so it clears both queue markers — a bounced issue must never
 // keep occupying an engineer seat via a leftover wip label.

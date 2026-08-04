@@ -3,6 +3,7 @@ import { join, resolve } from "node:path"
 import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
 import * as Ref from "effect/Ref"
+import * as Semaphore from "effect/Semaphore"
 import { CliConnectorConfig } from "@llm4ts/core/ConnectorConfig"
 import { makeChat } from "@llm4ts/flow/Chat"
 import { CostBudget, type CostCell } from "@llm4ts/flow/CostLedger"
@@ -61,7 +62,7 @@ import {
 
 export type IssueOutcome = "Shipped" | "Bounced" | "Failed"
 
-const run = (
+export const run = (
   argv: ReadonlyArray<string>,
   cwd: string
 ): Effect.Effect<string, FlowError> =>
@@ -104,7 +105,7 @@ export const pruneNonCodingTasks = (plan: Plan): Plan => {
       })
 }
 
-const positiveIntOr = (raw: string | undefined, fallback: number): number => {
+export const positiveIntOr = (raw: string | undefined, fallback: number): number => {
   const parsed = raw === undefined ? Number.NaN : Number(raw)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
@@ -159,9 +160,10 @@ export const resetIssueState = (
 // resume instead of restart (DESIGN.md reconciliation).
 export const ensureWorktree = (
   workspaceDir: string,
-  intent: ClaimIntent
-): Effect.Effect<string, FlowError> =>
-  Effect.gen(function* () {
+  intent: ClaimIntent,
+  lock?: Semaphore.Semaphore
+): Effect.Effect<string, FlowError> => {
+  const setup = Effect.gen(function* () {
     const { repoDir, worktree } = issuePaths(workspaceDir, intent)
     yield* Effect.tryPromise({
       try: () => mkdir(join(workspaceDir, "repos"), { recursive: true }),
@@ -193,8 +195,12 @@ export const ensureWorktree = (
     }
     return worktree
   })
+  // Clone/fetch/worktree-add touch the shared per-target clone; concurrent
+  // stage workers serialize just this setup, then run free.
+  return lock === undefined ? setup : lock.withPermits(1)(setup)
+}
 
-const readHandbook = (cwd: string): Effect.Effect<string> =>
+export const readHandbook = (cwd: string): Effect.Effect<string> =>
   Effect.tryPromise({
     try: () => readFile(join(cwd, "COMPANY.md"), "utf8"),
     catch: () => "missing"
@@ -205,12 +211,12 @@ export interface EngineerReport {
   readonly costUsd: number
 }
 
-const totalCost = (cells: ReadonlyArray<CostCell>): number =>
+export const totalCost = (cells: ReadonlyArray<CostCell>): number =>
   cells.reduce((sum, cell) => sum + (cell.costUsd ?? 0), 0)
 
 // Post-run bookkeeping helpers are best-effort: a failed comment must not
 // turn a shipped issue into a crashed daemon.
-const tell = (
+export const tell = (
   gh: GitHubToolShape,
   ref: IssueRef,
   body: string

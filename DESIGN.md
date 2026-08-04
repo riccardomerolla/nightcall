@@ -107,6 +107,9 @@ backlog self-triage).
 | `factory:failed`     | attempts/budget exhausted; see comment | orchestrator |
 | `factory:budget-N`   | per-issue budget override ($N)         | human only   |
 | `factory:fresh`      | one-shot: discard branch/worktree/plan, restart from origin/HEAD | human only (stripped after reset) |
+| `factory:planned`    | staged pipeline: plan posted, ready for coder | orchestrator |
+| `factory:coded`      | staged pipeline: implemented, ready for reviewer | orchestrator |
+| `factory:reviewed`   | staged pipeline: reviewed, ready for QA | orchestrator |
 
 - Claim = remove `ready`, add `wip`, self-assign, comment the plan — the
   first write the orchestrator makes for an issue.

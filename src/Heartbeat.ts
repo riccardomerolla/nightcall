@@ -1,5 +1,6 @@
 import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
+import * as Ref from "effect/Ref"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import {
@@ -10,7 +11,7 @@ import {
 } from "@llm4ts/flow/GitHubTool"
 import type { CompanyConfig, TargetRepo } from "./Config.ts"
 import { LedgerEntry, appendLedger, readLedger, spentToday } from "./Ledger.ts"
-import { Labels, claim, isEpic, phaseOf, signed } from "./Protocol.ts"
+import { Labels, claim, isEpic, phaseOf, signed, stageClaim } from "./Protocol.ts"
 
 // One heartbeat of the Chief of Staff: poll → decide → act. Polling and
 // acting go through GitHubTool; the decision in between is a pure function
@@ -22,6 +23,9 @@ export interface TargetSnapshot {
   readonly target: TargetRepo
   readonly ready: ReadonlyArray<IssueSummary>
   readonly wip: ReadonlyArray<IssueSummary>
+  readonly planned: ReadonlyArray<IssueSummary>
+  readonly coded: ReadonlyArray<IssueSummary>
+  readonly reviewed: ReadonlyArray<IssueSummary>
 }
 
 export interface ClaimIntent {
@@ -29,9 +33,14 @@ export interface ClaimIntent {
   readonly issue: IssueSummary
 }
 
+export type Stage = "plan" | "code" | "review" | "qa"
+
 export interface HeartbeatDecision {
   readonly claims: ReadonlyArray<ClaimIntent>
   readonly epics: ReadonlyArray<ClaimIntent>
+  // Staged pipeline: one intent list per stage, capped independently so
+  // four different issues can advance one stage each per beat.
+  readonly stages: Readonly<Record<Stage, ReadonlyArray<ClaimIntent>>>
   readonly inFlight: number
   readonly throttled: boolean
 }
@@ -46,14 +55,26 @@ export const poll = (
   Effect.forEach(targets, (target) =>
     Effect.gen(function* () {
       const repo = repoRefOf(target)
-      const ready = yield* gh.listIssues(repo, { labels: [Labels.ready] })
-      const wip = yield* gh.listIssues(repo, { labels: [Labels.wip] })
+      const byLabel = (label: string): Effect.Effect<ReadonlyArray<IssueSummary>, FlowError> =>
+        gh.listIssues(repo, { labels: [label] })
+      const ready = yield* byLabel(Labels.ready)
+      const wip = yield* byLabel(Labels.wip)
+      const planned = yield* byLabel(Labels.planned)
+      const coded = yield* byLabel(Labels.coded)
+      const reviewed = yield* byLabel(Labels.reviewed)
+      // Queries are label-based; phaseOf re-checks precedence so an issue
+      // carrying leftover markers is never claimed at two stages at once.
+      const inPhase = (
+        issues: ReadonlyArray<IssueSummary>,
+        phase: ReturnType<typeof phaseOf>
+      ): ReadonlyArray<IssueSummary> => issues.filter((issue) => phaseOf(issue.labels) === phase)
       return {
         target,
-        // The ready query is label-based; phaseOf re-checks precedence so an
-        // issue carrying leftover wip/failed markers is never claimed twice.
-        ready: ready.filter((issue) => phaseOf(issue.labels) === "Ready"),
-        wip: wip.filter((issue) => phaseOf(issue.labels) === "InProgress")
+        ready: inPhase(ready, "Ready"),
+        wip: inPhase(wip, "InProgress"),
+        planned: inPhase(planned, "Planned"),
+        coded: inPhase(coded, "Coded"),
+        reviewed: inPhase(reviewed, "Reviewed")
       }
     })
   )
@@ -73,9 +94,27 @@ export const decide = (
   let seats = throttled ? 0 : Math.max(0, config.engineerParallelism - inFlight)
   const claims: Array<ClaimIntent> = []
   const epics: Array<ClaimIntent> = []
+  const oldestFirst = (issues: ReadonlyArray<IssueSummary>): ReadonlyArray<IssueSummary> =>
+    [...issues].sort((a, b) => a.number - b.number)
+  const takeStage = (
+    pick: (snapshot: TargetSnapshot) => ReadonlyArray<IssueSummary>,
+    cap: number
+  ): ReadonlyArray<ClaimIntent> => {
+    if (throttled) {
+      return []
+    }
+    const intents: Array<ClaimIntent> = []
+    for (const snapshot of snapshots) {
+      for (const issue of oldestFirst(pick(snapshot))) {
+        if (intents.length < cap) {
+          intents.push({ target: snapshot.target, issue })
+        }
+      }
+    }
+    return intents
+  }
   for (const snapshot of snapshots) {
-    const oldestFirst = [...snapshot.ready].sort((a, b) => a.number - b.number)
-    for (const issue of oldestFirst) {
+    for (const issue of oldestFirst(snapshot.ready)) {
       if (isEpic(issue.labels)) {
         if (!throttled) {
           epics.push({ target: snapshot.target, issue })
@@ -86,7 +125,18 @@ export const decide = (
       }
     }
   }
-  return { claims, epics, inFlight, throttled }
+  return {
+    claims,
+    epics,
+    stages: {
+      plan: claims.slice(0, 1),
+      code: takeStage((snapshot) => snapshot.planned, config.engineerParallelism),
+      review: takeStage((snapshot) => snapshot.coded, 1),
+      qa: takeStage((snapshot) => snapshot.reviewed, 1)
+    },
+    inFlight,
+    throttled
+  }
 }
 
 export const claimComment = signed(
@@ -110,7 +160,7 @@ export const executeClaim = (
   })
 
 export interface WorkerReport {
-  readonly outcome: "Shipped" | "Bounced" | "Failed"
+  readonly outcome: "Shipped" | "Bounced" | "Failed" | "Advanced"
   readonly costUsd: number
 }
 
@@ -124,6 +174,10 @@ export interface HeartbeatOptions {
   // Decomposes one ready epic into child issues; wired to
   // TechLead.runEpic. Epics are observed-only when unset.
   readonly epicWorker?: (intent: ClaimIntent) => Effect.Effect<WorkerReport>
+  // Staged pipeline: one worker per stage. When set (and claimMode is on),
+  // stage intents run CONCURRENTLY — up to four different issues advance
+  // one stage each per beat — and the monolithic `worker` is not used.
+  readonly stageWorkers?: Readonly<Record<Stage, (intent: ClaimIntent) => Effect.Effect<WorkerReport>>>
   // Where the ledger lives; no ledger (and no spend throttle) when unset.
   readonly workspaceDir?: string
   // Optional standup issue: a heartbeat with activity posts a summary
@@ -205,6 +259,63 @@ export const heartbeat = (
         )
       }
     }
+    // Staged pipeline: claim and run every stage intent concurrently. Each
+    // intent is a different issue (an issue sits at exactly one phase), so
+    // the only shared resource is the target clone, which the workers
+    // serialize internally.
+    if (options.claimMode && options.stageWorkers !== undefined) {
+      const stageWorkers = options.stageWorkers
+      const spentRef = yield* Ref.make(spent)
+      const stagePairs = (Object.entries(decision.stages) as ReadonlyArray<
+        [Stage, ReadonlyArray<ClaimIntent>]
+      >).flatMap(([stage, intents]) => intents.map((intent) => ({ stage, intent })))
+      const results = yield* Effect.all(
+        stagePairs.map(({ stage, intent }) =>
+          Effect.gen(function* () {
+            if (stage === "plan") {
+              yield* executeClaim(gh, intent)
+            } else {
+              yield* Effect.ignore(
+                gh.editIssueLabels(intent.issue.ref(repoRefOf(intent.target)), stageClaim.add, [])
+              )
+            }
+            yield* say(`${stage}: claimed ${intent.target.slug}#${intent.issue.number}`)
+            const report = yield* stageWorkers[stage](intent)
+            const total = yield* Ref.updateAndGet(spentRef, (value) => value + report.costUsd)
+            yield* say(
+              `${stage}: ${intent.target.slug}#${intent.issue.number} → ${report.outcome} ` +
+                `($${report.costUsd.toFixed(4)}, $${total.toFixed(2)} today)`
+            )
+            if (options.workspaceDir !== undefined) {
+              yield* appendLedger(
+                options.workspaceDir,
+                LedgerEntry.make({
+                  at: nowIso,
+                  target: intent.target.slug,
+                  issue: intent.issue.number,
+                  outcome: report.outcome,
+                  costUsd: report.costUsd
+                })
+              )
+            }
+            return { intent, report }
+          })
+        ),
+        { concurrency: 4 }
+      )
+      worked.push(...results)
+      spent = yield* Ref.get(spentRef)
+      if (options.standupIssue !== undefined && (worked.length > 0 || decision.throttled)) {
+        yield* Effect.ignore(
+          gh.writeIssueComment(
+            options.standupIssue,
+            signed(standupSummary(decision, worked, spent, config.dailyBudgetUsd))
+          )
+        )
+      }
+      return decision
+    }
+
     for (const intent of decision.claims) {
       // Claiming without a worker would strand the issue in factory:wip,
       // so a missing worker falls back to observe behavior.
