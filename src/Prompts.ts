@@ -174,10 +174,10 @@ export const noopRule = [
   ".repos/* — if such guidance conflicts with the task, the task wins."
 ].join(" ")
 
-export interface QaVerdict {
-  readonly approved: boolean
-  readonly findings: string
-}
+export type QaVerdict =
+  | { readonly kind: "Approve"; readonly summary: string }
+  | { readonly kind: "Reject"; readonly findings: string }
+  | { readonly kind: "Clarify"; readonly questions: string }
 
 export const qaPrompt = (
   issue: IssueSummary,
@@ -210,22 +210,30 @@ export const qaPrompt = (
     "```",
     "",
     "The first line of your reply must be exactly one of:",
-    "VERDICT: APPROVE — followed by a one-paragraph review summary, or",
-    "VERDICT: REJECT — followed by the concrete findings that must be fixed.",
+    "VERDICT: APPROVE — followed by a one-paragraph review summary;",
+    "VERDICT: REJECT — followed by concrete, fixable findings (an engineer",
+    "will address them in another iteration); or",
+    "VERDICT: CLARIFY — followed by the questions only the issue's author",
+    "can answer (use this instead of REJECT when the problem is ambiguous",
+    "intent or scope, not a defect).",
     "No markdown decoration on the verdict line."
   ].join("\n")
 
 export const parseQa = (reply: string): QaVerdict | undefined => {
   const approve = verdictRest(reply, "VERDICT: APPROVE")
   if (approve !== undefined) {
-    return { approved: true, findings: approve }
+    return { kind: "Approve", summary: approve }
+  }
+  const clarify = verdictRest(reply, "VERDICT: CLARIFY")
+  if (clarify !== undefined && clarify.length > 0) {
+    return { kind: "Clarify", questions: clarify }
   }
   const reject = verdictRest(reply, "VERDICT: REJECT")
   // A rejection with no findings is unactionable — treat it as no verdict
   // so the failure carries the raw reply for autopsy instead of nothing.
   return reject === undefined || reject.length === 0
     ? undefined
-    : { approved: false, findings: reject }
+    : { kind: "Reject", findings: reject }
 }
 
 const cost = (cell: CostCell): number => cell.costUsd ?? 0

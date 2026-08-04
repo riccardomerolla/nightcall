@@ -14,6 +14,7 @@ import { ProcessError, type FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import { makeGitHubTool, type GitHubToolShape } from "@llm4ts/flow/GitHubTool"
 import { makePlanStore } from "@llm4ts/flow/Persistence"
+import { Plan, Task } from "@llm4ts/flow/Plan"
 import { planFrom } from "@llm4ts/flow/Planner"
 import { lintCommand, minimalReviewers, reviewAndFixLoop } from "@llm4ts/flow/Review"
 import { coderFromEnv, withTurnLimit } from "@llm4ts/runner/Connectors"
@@ -295,20 +296,75 @@ export const runStage = (
             : yield* qa.ask(qaPrompt(intent.issue, criteria, diff, repoFiles))
         const verdict =
           reply === undefined
-            ? { approved: false, findings: "The change produced an empty diff." }
+            ? ({ kind: "Reject", findings: "The change produced an empty diff." } as const)
             : parseQa(reply)
-        if (verdict === undefined || !verdict.approved) {
+        if (verdict === undefined) {
           return yield* Effect.fail(
             ProcessError.make({
               message: "qa review",
-              detail:
-                verdict === undefined
-                  ? `QA reply carried no parseable verdict. Raw reply:\n${(reply ?? "").slice(0, 1500)}`
-                  : `QA rejected the change:\n${verdict.findings}`
+              detail: `QA reply carried no parseable verdict. Raw reply:\n${(reply ?? "").slice(0, 1500)}`
             })
           )
         }
-        yield* Ref.set(qaSummary, verdict.findings)
+        if (verdict.kind === "Clarify") {
+          // QA's upward channel: intent/scope questions go to the human,
+          // the pipeline parks at needs-info instead of burning attempts.
+          yield* context.hosting.writeIssueComment(
+            ref,
+            signed(`QA needs clarification before shipping:\n\n${verdict.questions}`)
+          )
+          yield* context.hosting.editIssueLabels(
+            ref,
+            [Labels.needsInfo],
+            [Labels.wip, Labels.reviewed]
+          )
+          yield* Ref.set(outcome, "Bounced")
+          return
+        }
+        if (verdict.kind === "Reject") {
+          const attempt = attemptOf(intent.issue.labels) + 1
+          if (attemptOf(intent.issue.labels) >= config.maxAttempts) {
+            return yield* Effect.fail(
+              ProcessError.make({
+                message: "qa review",
+                detail: `QA rejected the change after ${config.maxAttempts} iteration(s):\n${verdict.findings}`
+              })
+            )
+          }
+          // Findings become a plan task and the issue loops back through
+          // code → review → QA — the iteration the org chart promised.
+          const planned = yield* store.load(planPath)
+          if (planned !== undefined) {
+            yield* store.save(
+              planPath,
+              Plan.make({
+                epicId: planned.epicId,
+                tasks: [
+                  ...planned.tasks,
+                  Task.make({
+                    title: `Address QA findings (round ${attempt})`,
+                    description: verdict.findings
+                  })
+                ],
+                ...(planned.brief === undefined ? {} : { brief: planned.brief })
+              })
+            )
+          }
+          yield* context.hosting.writeIssueComment(
+            ref,
+            signed(
+              `QA requested changes (round ${attempt}) — sending back to the code stage:\n\n${verdict.findings}`
+            )
+          )
+          yield* context.hosting.editIssueLabels(
+            ref,
+            [Labels.planned, attemptLabel(attempt)],
+            [Labels.wip, Labels.reviewed]
+          )
+          yield* Ref.set(outcome, "Iterated")
+          return
+        }
+        yield* Ref.set(qaSummary, verdict.summary)
         yield* context.git.push("origin", branch)
         yield* Ref.set(outcome, "Shipped")
       })

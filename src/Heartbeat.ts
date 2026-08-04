@@ -160,7 +160,7 @@ export const executeClaim = (
   })
 
 export interface WorkerReport {
-  readonly outcome: "Shipped" | "Bounced" | "Failed" | "Advanced"
+  readonly outcome: "Shipped" | "Bounced" | "Failed" | "Advanced" | "Iterated"
   readonly costUsd: number
 }
 

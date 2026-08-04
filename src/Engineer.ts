@@ -377,9 +377,9 @@ export const runIssue = (
             : yield* qa.ask(qaPrompt(intent.issue, criteria, diff, repoFiles))
         const verdict =
           reply === undefined
-            ? { approved: false, findings: "The change produced an empty diff." }
+            ? ({ kind: "Reject", findings: "The change produced an empty diff." } as const)
             : parseQa(reply)
-        if (verdict === undefined || !verdict.approved) {
+        if (verdict === undefined || verdict.kind === "Reject") {
           return yield* Effect.fail(
             ProcessError.make({
               message: "qa review",
@@ -390,7 +390,16 @@ export const runIssue = (
             })
           )
         }
-        yield* Ref.set(qaSummary, verdict.findings)
+        if (verdict.kind === "Clarify") {
+          yield* context.hosting.writeIssueComment(
+            ref,
+            signed(`QA needs clarification before shipping:\n\n${verdict.questions}`)
+          )
+          yield* context.hosting.editIssueLabels(ref, bounce.add, bounce.remove)
+          yield* Ref.set(outcome, "Bounced")
+          return
+        }
+        yield* Ref.set(qaSummary, verdict.summary)
         yield* context.git.push("origin", branch)
         yield* Ref.set(outcome, "Shipped")
       })

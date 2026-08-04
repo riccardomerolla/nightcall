@@ -33,30 +33,33 @@ describe("Prompts", () => {
 
   it("parses QA verdicts, tolerating markdown decoration", () => {
     assert.deepStrictEqual(parseQa("VERDICT: APPROVE\nLooks correct."), {
-      approved: true,
-      findings: "Looks correct."
+      kind: "Approve",
+      summary: "Looks correct."
     })
-    assert.strictEqual(parseQa("VERDICT: REJECT\nMissing test.")?.approved, false)
-    assert.strictEqual(parseQa("**VERDICT: APPROVE**\nSolid.")?.approved, true)
-    assert.strictEqual(parseQa("## Verdict: reject\nNo tests.")?.approved, false)
+    assert.strictEqual(parseQa("VERDICT: REJECT\nMissing test.")?.kind, "Reject")
+    assert.strictEqual(parseQa("**VERDICT: APPROVE**\nSolid.")?.kind, "Approve")
+    assert.strictEqual(parseQa("## Verdict: reject\nNo tests.")?.kind, "Reject")
     assert.strictEqual(parseTriage("**VERDICT: ACCEPT**\n- criteria")?.kind, "Accept")
     // Findings-first replies keep their payload; findings-free rejections
     // are no verdict at all.
     assert.deepStrictEqual(parseQa("The error type is wrong.\nVERDICT: REJECT"), {
-      approved: false,
+      kind: "Reject",
       findings: "The error type is wrong."
     })
     // Same-line findings after an em-dash (the codex house style).
     assert.deepStrictEqual(
       parseQa("VERDICT: REJECT — The dashboard fetches fixtures the diff does not publish."),
       {
-        approved: false,
+        kind: "Reject",
         findings: "The dashboard fetches fixtures the diff does not publish."
       }
     )
-    assert.strictEqual(
-      parseQa("VERDICT: APPROVE — clean, well-tested change.")?.findings,
-      "clean, well-tested change."
+    assert.deepStrictEqual(
+      parseQa("VERDICT: CLARIFY — is the EUR 500 minimum intended for sells too?"),
+      {
+        kind: "Clarify",
+        questions: "is the EUR 500 minimum intended for sells too?"
+      }
     )
     assert.isUndefined(parseQa("VERDICT: REJECT"))
     assert.isUndefined(parseQa("ship it"))
