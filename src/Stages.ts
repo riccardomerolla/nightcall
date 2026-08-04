@@ -534,15 +534,35 @@ export const runMend = (
       return { outcome: "Failed" as const, costUsd: 0 }
     }
 
-    const upToDate = yield* attempt(
+    // REBASE_HEAD lingers after a finished rebase, so in-progress means
+    // the rebase state directory exists — the only reliable signal.
+    const rebaseInProgress = attempt(
+      run(
+        [
+          "sh",
+          "-lc",
+          `test -d "$(git -C '${worktree}' rev-parse --git-path rebase-merge)" || test -d "$(git -C '${worktree}' rev-parse --git-path rebase-apply)"`
+        ],
+        workspaceDir
+      )
+    )
+    const localSha = yield* run(["git", "-C", worktree, "rev-parse", "HEAD"], workspaceDir).pipe(
+      Effect.orElseSucceed(() => "")
+    )
+    const remoteSha = yield* run(
+      ["git", "-C", worktree, "rev-parse", `origin/${branch}`],
+      workspaceDir
+    ).pipe(Effect.orElseSucceed(() => ""))
+    const ancestor = yield* attempt(
       run(["git", "-C", worktree, "merge-base", "--is-ancestor", "origin/HEAD", "HEAD"], workspaceDir)
     )
-    if (upToDate) {
+    if (ancestor && localSha === remoteSha && localSha.length > 0) {
       yield* unclaim
       return { outcome: "Advanced" as const, costUsd: 0 }
     }
-
-    const rebasedClean = yield* attempt(
+    // When ancestor holds but the shas differ, a previous mend already
+    // rebased locally without pushing — skip the rebase, go gate-and-push.
+    const rebasedClean = ancestor ? true : yield* attempt(
       run(["git", "-C", worktree, "-c", "core.editor=true", "rebase", "origin/HEAD"], workspaceDir)
     )
     const cellsRef = yield* Ref.make<ReadonlyArray<CostCell>>([])
@@ -574,9 +594,7 @@ export const runMend = (
           const body = (context: FlowContextShape): Effect.Effect<void, FlowError> =>
             Effect.gen(function* () {
               for (let round = 0; round < 10; round += 1) {
-                const rebasing = yield* attempt(
-                  run(["git", "-C", worktree, "rev-parse", "--verify", "REBASE_HEAD"], workspaceDir)
-                )
+                const rebasing = yield* rebaseInProgress
                 if (!rebasing) {
                   break
                 }
@@ -628,9 +646,7 @@ export const runMend = (
                   )
                 )
               }
-              const stillRebasing = yield* attempt(
-                run(["git", "-C", worktree, "rev-parse", "--verify", "REBASE_HEAD"], workspaceDir)
-              )
+              const stillRebasing = yield* rebaseInProgress
               if (stillRebasing) {
                 return yield* Effect.fail(
                   ProcessError.make({
