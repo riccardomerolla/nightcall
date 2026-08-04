@@ -207,10 +207,39 @@ export const runStage = (
             })
           )
         }
-        // A plan with nothing left to do means this round exists because a
-        // human sent the issue back (post-escalation guidance): their
-        // comments since Nightcall's last report become the round's task.
+        // A plan with nothing left to do means this round exists because
+        // someone sent the issue back. Two task sources, in priority order:
+        // a red gate (deterministic — the machine knows what is broken),
+        // then human guidance comments since Nightcall's last report.
         if (pruneNonCodingTasks(persisted).nextIncomplete === undefined) {
+          const gateFailure =
+            gate === undefined || gate.length === 0
+              ? undefined
+              : yield* run(["sh", "-lc", `cd '${worktree}' && ${gate}`], workspaceDir).pipe(
+                  Effect.map((): string | undefined => undefined),
+                  Effect.catch((error) =>
+                    Effect.succeed<string | undefined>(
+                      "detail" in error ? String(error.detail) : error.message
+                    )
+                  )
+                )
+          if (gateFailure !== undefined) {
+            persisted = Plan.make({
+              epicId: persisted.epicId,
+              tasks: [
+                ...persisted.tasks,
+                Task.make({
+                  title: "Make the gate green",
+                  description:
+                    "The gate currently fails on this branch. Fix the failures.\n" +
+                    "Gate output (tail):\n" +
+                    gateFailure.slice(-1500)
+                })
+              ],
+              ...(persisted.brief === undefined ? {} : { brief: persisted.brief })
+            })
+            yield* store.save(planPath, persisted)
+          }
           const comments = yield* context.hosting
             .readIssueComments(ref)
             .pipe(Effect.orElseSucceed(() => []))
