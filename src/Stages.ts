@@ -573,13 +573,33 @@ export const runMend = (
           yield* tracker.consume(bundle.events)
           const body = (context: FlowContextShape): Effect.Effect<void, FlowError> =>
             Effect.gen(function* () {
-              for (let round = 0; round < 5; round += 1) {
+              for (let round = 0; round < 10; round += 1) {
+                const rebasing = yield* attempt(
+                  run(["git", "-C", worktree, "rev-parse", "--verify", "REBASE_HEAD"], workspaceDir)
+                )
+                if (!rebasing) {
+                  break
+                }
                 const conflicted = yield* run(
                   ["git", "-C", worktree, "diff", "--name-only", "--diff-filter=U"],
                   workspaceDir
                 ).pipe(Effect.orElseSucceed(() => ""))
                 if (conflicted.trim().length === 0) {
-                  break
+                  // Nothing conflicted but the rebase is paused: either the
+                  // last resolution needs continuing, or the commit became
+                  // empty because main already contains it — skip it then.
+                  const continued = yield* attempt(
+                    run(
+                      ["git", "-C", worktree, "-c", "core.editor=true", "rebase", "--continue"],
+                      workspaceDir
+                    )
+                  )
+                  if (!continued) {
+                    yield* Effect.ignore(
+                      run(["git", "-C", worktree, "rebase", "--skip"], workspaceDir)
+                    )
+                  }
+                  continue
                 }
                 resolvedRounds += 1
                 const chat = yield* makeChat(context.coder, {
