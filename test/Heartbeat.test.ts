@@ -194,6 +194,10 @@ describe("Heartbeat", () => {
           mend: stageWorker("mend")
         }
       })
+      // Stage workers are forked detached; give the runtime a few ticks.
+      for (let i = 0; i < 10; i += 1) {
+        yield* Effect.yieldNow
+      }
       assert.deepStrictEqual([...ran].sort(), ["code:41", "qa:43", "review:42"])
     })
   )

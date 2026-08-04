@@ -281,50 +281,47 @@ export const heartbeat = (
       const stagePairs = (Object.entries(decision.stages) as ReadonlyArray<
         [Stage, ReadonlyArray<ClaimIntent>]
       >).flatMap(([stage, intents]) => intents.map((intent) => ({ stage, intent })))
-      const results = yield* Effect.all(
-        stagePairs.map(({ stage, intent }) =>
-          Effect.gen(function* () {
-            if (stage === "plan") {
-              yield* executeClaim(gh, intent)
-            } else {
-              yield* Effect.ignore(
-                gh.editIssueLabels(intent.issue.ref(repoRefOf(intent.target)), stageClaim.add, [])
-              )
-            }
-            yield* say(`${stage}: claimed ${intent.target.slug}#${intent.issue.number}`)
-            const report = yield* stageWorkers[stage](intent)
-            const total = yield* Ref.updateAndGet(spentRef, (value) => value + report.costUsd)
-            yield* say(
-              `${stage}: ${intent.target.slug}#${intent.issue.number} → ${report.outcome} ` +
-                `($${report.costUsd.toFixed(4)}, $${total.toFixed(2)} today)`
+      // Claim synchronously (the claim is the mutual-exclusion write),
+      // then FORK each worker: the beat returns in seconds, so cheap
+      // stages (mend's merge checks, new claims, epic-watch) tick every
+      // heartbeat instead of waiting behind multi-minute coder runs. The
+      // wip label prevents double-claims across beats; boot reconciliation
+      // recovers fibers lost to a restart. Outcomes are logged and
+      // ledgered by each fiber as it finishes.
+      yield* Effect.forEach(stagePairs, ({ stage, intent }) =>
+        Effect.gen(function* () {
+          if (stage === "plan") {
+            yield* executeClaim(gh, intent)
+          } else {
+            yield* Effect.ignore(
+              gh.editIssueLabels(intent.issue.ref(repoRefOf(intent.target)), stageClaim.add, [])
             )
-            if (options.workspaceDir !== undefined) {
-              yield* appendLedger(
-                options.workspaceDir,
-                LedgerEntry.make({
-                  at: nowIso,
-                  target: intent.target.slug,
-                  issue: intent.issue.number,
-                  outcome: report.outcome,
-                  costUsd: report.costUsd
-                })
+          }
+          yield* say(`${stage}: claimed ${intent.target.slug}#${intent.issue.number}`)
+          yield* Effect.forkDetach(
+            Effect.gen(function* () {
+              const report = yield* stageWorkers[stage](intent)
+              const total = yield* Ref.updateAndGet(spentRef, (value) => value + report.costUsd)
+              yield* say(
+                `${stage}: ${intent.target.slug}#${intent.issue.number} → ${report.outcome} ` +
+                  `($${report.costUsd.toFixed(4)}, $${total.toFixed(2)} today)`
               )
-            }
-            return { intent, report }
-          })
-        ),
-        { concurrency: 4 }
-      )
-      worked.push(...results)
-      spent = yield* Ref.get(spentRef)
-      if (options.standupIssue !== undefined && (worked.length > 0 || decision.throttled)) {
-        yield* Effect.ignore(
-          gh.writeIssueComment(
-            options.standupIssue,
-            signed(standupSummary(decision, worked, spent, config.dailyBudgetUsd))
+              if (options.workspaceDir !== undefined) {
+                yield* appendLedger(
+                  options.workspaceDir,
+                  LedgerEntry.make({
+                    at: nowIso,
+                    target: intent.target.slug,
+                    issue: intent.issue.number,
+                    outcome: report.outcome,
+                    costUsd: report.costUsd
+                  })
+                )
+              }
+            })
           )
-        )
-      }
+        })
+      )
       return decision
     }
 
