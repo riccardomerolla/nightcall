@@ -556,9 +556,49 @@ export const runMend = (
     const ancestor = yield* attempt(
       run(["git", "-C", worktree, "merge-base", "--is-ancestor", "origin/HEAD", "HEAD"], workspaceDir)
     )
+    // Continuous delivery: once the branch is confirmed current, merge the
+    // PR automatically when its checks are green. NIGHTCALL_AUTO_MERGE=off
+    // restores the human merge gate.
+    const shipIfGreen: Effect.Effect<boolean> =
+      environment["NIGHTCALL_AUTO_MERGE"] === "off"
+        ? Effect.succeed(false)
+        : Effect.gen(function* () {
+            const worktreeGh = makeGitHubTool(nodeProcessExecutor, worktree, events)
+            const pr = yield* worktreeGh.viewOpenPr.pipe(
+              Effect.orElseSucceed(() => undefined)
+            )
+            if (pr === undefined) {
+              return false
+            }
+            const checks = yield* worktreeGh.prChecks(pr).pipe(
+              Effect.orElseSucceed(() => "Pending" as const)
+            )
+            if (checks !== "Success") {
+              yield* events.publish(
+                Info.make({
+                  message: `auto-merge: PR #${pr.number} checks ${checks}; waiting`
+                })
+              )
+              return false
+            }
+            const merged = yield* worktreeGh.mergePr(pr).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false)
+            )
+            if (merged) {
+              yield* tell(
+                gh,
+                ref,
+                `Shipped: PR #${pr.number} merged automatically (checks green). 🚀`
+              )
+            }
+            return merged
+          })
+
     if (ancestor && localSha === remoteSha && localSha.length > 0) {
+      const shipped = yield* shipIfGreen
       yield* unclaim
-      return { outcome: "Advanced" as const, costUsd: 0 }
+      return { outcome: shipped ? ("Shipped" as const) : ("Advanced" as const), costUsd: 0 }
     }
     // When ancestor holds but the shas differ, a previous mend already
     // rebased locally without pushing — skip the rebase, go gate-and-push.
@@ -715,6 +755,10 @@ export const runMend = (
         ? "Rebased onto main cleanly; the PR is mergeable again."
         : `Rebased onto main; the coder resolved conflicts across ${resolvedRounds} round(s). The PR is mergeable again.\n\n${renderInvoice(cells, config.issueBudgetUsd)}`
     )
+    const shipped = yield* shipIfGreen
     yield* unclaim
-    return { outcome: "Advanced" as const, costUsd: totalCost(cells) }
+    return {
+      outcome: shipped ? ("Shipped" as const) : ("Advanced" as const),
+      costUsd: totalCost(cells)
+    }
   })

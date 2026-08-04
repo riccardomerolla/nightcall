@@ -13,9 +13,9 @@
     "start": "node --experimental-strip-types src/main.ts"
   },
   "dependencies": {
-    "@llm4ts/core": "0.7.4",
-    "@llm4ts/flow": "0.7.4",
-    "@llm4ts/runner": "0.7.4",
+    "@llm4ts/core": "0.7.5",
+    "@llm4ts/flow": "0.7.5",
+    "@llm4ts/runner": "0.7.5",
     "effect": "^4.0.0-beta.102"
   },
   "devDependencies": {

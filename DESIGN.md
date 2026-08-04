@@ -19,6 +19,11 @@ body — GitHubTool has no issue-body edit), the ledger is a local JSONL
 under the workspace (orphan-branch publication deferred), QA rejection
 fails the attempt rather than looping findings back to the Engineer, and
 epics are reported but not yet decomposed.
+Amendment 2026-08-04: continuous delivery — with the staged pipeline's
+mend stage keeping PRs current, the CEO ceded the merge click: green
+checks auto-merge by default (NIGHTCALL_AUTO_MERGE=off restores the
+gate). Merge authority is now exercised through issue scope, labels, and
+revert — not the button.
 
 ## Constraints
 

@@ -18,6 +18,8 @@ const commentCollector = (
   writePrComment: () => Effect.die("unused"),
   updatePr: () => Effect.die("unused"),
   prChecks: () => Effect.die("unused"),
+  viewOpenPr: Effect.die("unused"),
+  mergePr: () => Effect.die("unused"),
   listIssues: () => Effect.die("unused"),
   createIssue: () => Effect.die("unused"),
   editIssueLabels: () => Effect.die("unused"),
