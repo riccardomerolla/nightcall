@@ -28,7 +28,7 @@ const config = CompanyConfig.make({
   engineerParallelism: 1
 })
 
-const empty = { planned: [], coded: [], reviewed: [], inReview: [] }
+const empty = { planned: [], coded: [], reviewed: [], inReview: [], openNumbers: new Set<number>() }
 
 const summary = (number: number, labels: ReadonlyArray<string>): IssueSummary =>
   IssueSummary.make({
@@ -62,6 +62,27 @@ describe("Heartbeat", () => {
     assert.strictEqual(busy.inFlight, 1)
   })
 
+  it("decide blocks plan and code claims until Blocked-by prerequisites close", () => {
+    const blockedIssue = IssueSummary.make({
+      number: 52,
+      title: "Apply shell design",
+      body: "Work.\nBlocked-by: #51\n\nParent: #50 (epic)",
+      author: "bot",
+      labels: [Labels.planned],
+      updatedAt: "2026-08-04T00:00:00Z"
+    })
+    const withOpenBlocker = decide(
+      [{ target, ready: [], wip: [], planned: [blockedIssue], coded: [], reviewed: [], inReview: [], openNumbers: new Set([51]) }],
+      config
+    )
+    assert.deepStrictEqual(withOpenBlocker.stages.code, [])
+    const blockerClosed = decide(
+      [{ target, ready: [], wip: [], planned: [blockedIssue], coded: [], reviewed: [], inReview: [], openNumbers: new Set<number>() }],
+      config
+    )
+    assert.strictEqual(blockerClosed.stages.code.length, 1)
+  })
+
   it("decide stops claiming when today's spend exhausts the daily budget", () => {
     const ready = [summary(3, [Labels.ready])]
     const throttled = decide([{ target, ready, wip: [], ...empty }], config, 25)
@@ -82,7 +103,8 @@ describe("Heartbeat", () => {
         planned: [summary(31, [Labels.planned]), summary(32, [Labels.planned])],
         coded: [summary(33, [Labels.coded])],
         reviewed: [summary(34, [Labels.reviewed])],
-        inReview: [summary(35, [Labels.review])]
+        inReview: [summary(35, [Labels.review])],
+        openNumbers: new Set<number>()
       }
     ]
     const decision = decide(snapshots, config)
@@ -145,6 +167,10 @@ describe("Heartbeat", () => {
           ],
           [
             processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.review] })]),
+            listJson("[]")
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { state: "open" })]),
             listJson("[]")
           ],
           [
@@ -242,6 +268,10 @@ describe("Heartbeat", () => {
             listJson("[]")
           ],
           [
+            processCommandKey(["gh", ...issueListArgs(repo, { state: "open" })]),
+            listJson("[]")
+          ],
+          [
             processCommandKey([
               "gh",
               ...issueEditLabelsArgs(issueRef, [Labels.wip], [Labels.ready])
@@ -275,7 +305,7 @@ describe("Heartbeat", () => {
       assert.deepStrictEqual(epicReports, [5])
 
       assert.strictEqual(observed.claims.length, 1)
-      assert.strictEqual(readOnlyCalls, 6)
+      assert.strictEqual(readOnlyCalls, 7)
       assert.strictEqual(claimed.claims.length, 1)
       const issue = summary(3, [Labels.ready]).ref(repo)
       const editKey = processCommandKey([

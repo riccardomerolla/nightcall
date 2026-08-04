@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { CostCell } from "@llm4ts/flow/CostLedger"
 import { IssueSummary } from "@llm4ts/flow/GitHubTool"
 import {
+  blockedByRefs,
   guidanceSince,
   splitQaSummary,
   isEpicChild,
@@ -154,6 +155,26 @@ describe("Prompts", () => {
     assert.strictEqual(children?.[0]?.title, "Domain schemas in lib/domain")
     assert.include(children?.[0]?.body, "Acceptance: npm run gate passes.")
     assert.strictEqual(children?.[1]?.title, "Importers in lib/import")
+    assert.deepStrictEqual(children?.[1]?.dependsOn, [])
+
+    const withDeps = parseEpicChildren(
+      [
+        "CHILD: Foundation",
+        "Tokens and defaults.",
+        "CHILD: Shell",
+        "DEPENDS: 1",
+        "Apply the foundation to the shell.",
+        "CHILD: Pages",
+        "DEPENDS: 1,2",
+        "Apply everywhere."
+      ].join("\n")
+    )
+    assert.deepStrictEqual(withDeps?.[0]?.dependsOn, [])
+    assert.deepStrictEqual(withDeps?.[1]?.dependsOn, [1])
+    assert.deepStrictEqual(withDeps?.[2]?.dependsOn, [1, 2])
+    assert.notInclude(withDeps?.[1]?.body, "DEPENDS")
+    assert.deepStrictEqual(blockedByRefs("Work.\nBlocked-by: #12, #14\n\nParent: #9 (epic)"), [12, 14])
+    assert.deepStrictEqual(blockedByRefs("no blockers here"), [])
     assert.isUndefined(parseEpicChildren("I would split this into three parts."))
     assert.isUndefined(parseEpicChildren("CHILD: title only, no body"))
   })

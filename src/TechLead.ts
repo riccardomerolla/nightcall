@@ -20,6 +20,7 @@ import { timestampedSurface } from "./Surface.ts"
 import type { CompanyConfig } from "./Config.ts"
 import { repoRefOf, type ClaimIntent, type WorkerReport } from "./Heartbeat.ts"
 import {
+  blockedByPrefix,
   epicChildMarker,
   epicDecompositionPrompt,
   maxEpicChildren,
@@ -117,14 +118,29 @@ export const runEpic = (
 
         const capped = children.slice(0, maxEpicChildren)
         const created: Array<string> = []
+        const numberOfOrdinal: Array<number> = []
         for (const child of capped) {
+          // DEPENDS ordinals refer to earlier children in this reply;
+          // creation order lets us resolve them to real issue numbers.
+          const blockers = child.dependsOn
+            .map((ordinal) => numberOfOrdinal[ordinal - 1])
+            .filter((value): value is number => value !== undefined)
+          const blockedLine =
+            blockers.length === 0
+              ? ""
+              : `\n${blockedByPrefix} ${blockers.map((n) => `#${n}`).join(", ")}`
           const childRef = yield* gh.createIssue(
             repo,
             child.title,
-            `${child.body}\n\n${epicChildMarker(intent.issue.number)}`,
+            `${child.body}${blockedLine}\n\n${epicChildMarker(intent.issue.number)}`,
             [Labels.ready]
           )
-          created.push(`- #${childRef.number} ${child.title}`)
+          numberOfOrdinal.push(childRef.number)
+          created.push(
+            `- #${childRef.number} ${child.title}${
+              blockers.length === 0 ? "" : ` (blocked by ${blockers.map((n) => `#${n}`).join(", ")})`
+            }`
+          )
           yield* events.publish(
             Info.make({ message: `epic #${intent.issue.number} → created #${childRef.number}` })
           )

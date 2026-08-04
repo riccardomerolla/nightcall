@@ -83,7 +83,21 @@ export const parseTriage = (reply: string): Triage | undefined => {
 export interface EpicChild {
   readonly title: string
   readonly body: string
+  // Ordinals (1-based) of earlier children in the same reply this child
+  // depends on; resolved to real issue numbers at creation time.
+  readonly dependsOn: ReadonlyArray<number>
 }
+
+export const blockedByPrefix = "Blocked-by:"
+
+// Issue numbers this issue must wait for (they must be closed before the
+// plan/code stages may claim it), parsed from Blocked-by: #12, #13 lines.
+export const blockedByRefs = (body: string): ReadonlyArray<number> =>
+  body
+    .split(/\r?\n/)
+    .filter((line) => line.trim().startsWith(blockedByPrefix))
+    .flatMap((line) => [...line.matchAll(/#(\d+)/g)].map((match) => Number(match[1])))
+    .filter((value) => Number.isInteger(value) && value > 0)
 
 // Marker appended to every child body at creation; children carrying it
 // were specified by the Tech Lead's decomposition and skip re-triage.
@@ -136,11 +150,16 @@ export const epicDecompositionPrompt = (
     "Rules: no markdown decoration on CHILD lines; every child must name",
     "concrete files/modules and testable acceptance criteria; never propose",
     "code. A child an engineer cannot finish in one sitting is too big.",
-    "Children are worked strictly in the order you emit them: a later child",
-    "may assume all earlier children are merged, and an earlier child must",
-    "create everything later children need. Each child must be fully",
-    "specified by its own body — never reference a child you do not emit,",
-    "and never mark a child as blocked on anything outside this list.",
+    "SEGREGATION FIRST: children run CONCURRENTLY unless you say otherwise,",
+    "so give each child a disjoint set of files/modules — two children",
+    "editing the same file is a decomposition failure. When overlap is",
+    "genuinely unavoidable, declare the dependency: the child's body may",
+    "start with a line 'DEPENDS: <ordinals>' (e.g. DEPENDS: 1 or",
+    "DEPENDS: 1,2) naming EARLIER children in this list it must wait for;",
+    "dependent children will not start until those have shipped. Each child",
+    "must be fully specified by its own body — never reference a child you",
+    "do not emit, and never mark a child as blocked on anything outside",
+    "this list.",
     ...(handbook.trim().length === 0 ? [] : ["", "Company handbook:", handbook])
   ].join("\n")
 
@@ -155,7 +174,25 @@ export const parseEpicChildren = (reply: string): ReadonlyArray<EpicChild> | und
     }
   }
   const parsed = children
-    .map((child) => ({ title: child.title, body: child.lines.join("\n").trim() }))
+    .map((child, index) => {
+      const dependsLine = child.lines.find((line) =>
+        line.replace(/[*_#>`]/g, "").trim().toUpperCase().startsWith("DEPENDS:")
+      )
+      const dependsOn =
+        dependsLine === undefined
+          ? []
+          : [...dependsLine.matchAll(/\d+/g)]
+              .map((match) => Number(match[0]))
+              .filter((value) => Number.isInteger(value) && value >= 1 && value <= index)
+      return {
+        title: child.title,
+        body: child.lines
+          .filter((line) => line !== dependsLine)
+          .join("\n")
+          .trim(),
+        dependsOn
+      }
+    })
     .filter((child) => child.title.length > 0 && child.body.length > 0)
   return parsed.length === 0 ? undefined : parsed
 }

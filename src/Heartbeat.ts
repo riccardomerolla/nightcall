@@ -11,6 +11,7 @@ import {
 } from "@llm4ts/flow/GitHubTool"
 import type { CompanyConfig, TargetRepo } from "./Config.ts"
 import { watchEpics } from "./EpicWatch.ts"
+import { blockedByRefs } from "./Prompts.ts"
 import { LedgerEntry, appendLedger, readLedger, spentToday } from "./Ledger.ts"
 import { Labels, claim, isEpic, phaseOf, signed, stageClaim } from "./Protocol.ts"
 
@@ -28,6 +29,9 @@ export interface TargetSnapshot {
   readonly coded: ReadonlyArray<IssueSummary>
   readonly reviewed: ReadonlyArray<IssueSummary>
   readonly inReview: ReadonlyArray<IssueSummary>
+  // Numbers of ALL open issues in the target — the blocked-by check needs
+  // to know whether a prerequisite is still open.
+  readonly openNumbers: ReadonlySet<number>
 }
 
 export interface ClaimIntent {
@@ -65,6 +69,7 @@ export const poll = (
       const coded = yield* byLabel(Labels.coded)
       const reviewed = yield* byLabel(Labels.reviewed)
       const inReview = yield* byLabel(Labels.review)
+      const allOpen = yield* gh.listIssues(repo, { state: "open" })
       // Queries are label-based; phaseOf re-checks precedence so an issue
       // carrying leftover markers is never claimed at two stages at once.
       const inPhase = (
@@ -78,7 +83,8 @@ export const poll = (
         planned: inPhase(planned, "Planned"),
         coded: inPhase(coded, "Coded"),
         reviewed: inPhase(reviewed, "Reviewed"),
-        inReview: inPhase(inReview, "InReview")
+        inReview: inPhase(inReview, "InReview"),
+        openNumbers: new Set(allOpen.map((issue) => issue.number))
       }
     })
   )
@@ -100,9 +106,15 @@ export const decide = (
   const epics: Array<ClaimIntent> = []
   const oldestFirst = (issues: ReadonlyArray<IssueSummary>): ReadonlyArray<IssueSummary> =>
     [...issues].sort((a, b) => a.number - b.number)
+  // Plan and code stages respect Blocked-by: a child waits until its
+  // prerequisites are closed. Later stages operate on work already built,
+  // so blocking them would only strand finished branches.
+  const blocked = (snapshot: TargetSnapshot, issue: IssueSummary): boolean =>
+    blockedByRefs(issue.body).some((number) => snapshot.openNumbers.has(number))
   const takeStage = (
     pick: (snapshot: TargetSnapshot) => ReadonlyArray<IssueSummary>,
-    cap: number
+    cap: number,
+    respectBlocking = false
   ): ReadonlyArray<ClaimIntent> => {
     if (throttled) {
       return []
@@ -110,7 +122,7 @@ export const decide = (
     const intents: Array<ClaimIntent> = []
     for (const snapshot of snapshots) {
       for (const issue of oldestFirst(pick(snapshot))) {
-        if (intents.length < cap) {
+        if (intents.length < cap && !(respectBlocking && blocked(snapshot, issue))) {
           intents.push({ target: snapshot.target, issue })
         }
       }
@@ -123,7 +135,7 @@ export const decide = (
         if (!throttled) {
           epics.push({ target: snapshot.target, issue })
         }
-      } else if (seats > 0) {
+      } else if (seats > 0 && !blocked(snapshot, issue)) {
         claims.push({ target: snapshot.target, issue })
         seats -= 1
       }
@@ -138,7 +150,7 @@ export const decide = (
       // work piles more branches onto the same base.
       mend: takeStage((snapshot) => snapshot.inReview, 1),
       plan: claims.slice(0, 1),
-      code: takeStage((snapshot) => snapshot.planned, config.engineerParallelism),
+      code: takeStage((snapshot) => snapshot.planned, config.engineerParallelism, true),
       review: takeStage((snapshot) => snapshot.coded, 1),
       qa: takeStage((snapshot) => snapshot.reviewed, 1)
     },
