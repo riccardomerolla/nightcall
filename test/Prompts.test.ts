@@ -9,6 +9,7 @@ import {
   prBody,
   renderInvoice
 } from "../src/Prompts.ts"
+import { epicChildrenStatus } from "../src/EpicWatch.ts"
 import { Labels, attemptLabel, attemptOf, bounce } from "../src/Protocol.ts"
 
 const issue = IssueSummary.make({
@@ -150,6 +151,25 @@ describe("Prompts", () => {
     assert.isTrue(isEpicChild("Do the thing.\n\nParent: #11 (epic)"))
     assert.isFalse(isEpicChild("Do the thing. See #11."))
     assert.deepStrictEqual([...bounce.remove], [Labels.ready, Labels.wip])
+  })
+
+  it("derives epic children status from the parent marker", () => {
+    const child = (number: number, parent: number): IssueSummary =>
+      IssueSummary.make({
+        number,
+        title: `Child ${number}`,
+        body: `Work.\n\nParent: #${parent} (epic)`,
+        author: "bot",
+        labels: [],
+        updatedAt: "2026-08-04T00:00:00Z"
+      })
+    const all = [child(2, 1), child(3, 1), child(9, 8)]
+    const done = epicChildrenStatus(1, [], all)
+    assert.isTrue(done.complete)
+    assert.deepStrictEqual(done.shipped, ["#2 Child 2", "#3 Child 3"])
+    const pending = epicChildrenStatus(1, [child(3, 1)], all)
+    assert.isFalse(pending.complete)
+    assert.isFalse(epicChildrenStatus(5, [], all).complete)
   })
 
   it("tracks attempts through labels", () => {

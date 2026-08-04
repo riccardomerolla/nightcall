@@ -25,7 +25,7 @@ import {
   maxEpicChildren,
   parseEpicChildren
 } from "./Prompts.ts"
-import { Labels, signed } from "./Protocol.ts"
+import { Labels, signature, signed } from "./Protocol.ts"
 
 // Epic decomposition: the Tech Lead turns one CEO epic into ordered child
 // issues. Issues-only — no worktree, no coder seat. The epic keeps
@@ -53,6 +53,28 @@ export const runEpic = (
     const ref = intent.issue.ref(repoRefOf(intent.target))
     const repo = repoRefOf(intent.target)
     const handbook = yield* readHandbook(process.cwd())
+    // Iteration mode: the epic already shipped once (factory:validate) and
+    // the CEO re-added ready — decompose from their feedback, not from the
+    // original body alone.
+    const iterating = intent.issue.labels.includes(Labels.validate)
+    const iteration = iterating
+      ? yield* Effect.gen(function* () {
+          const comments = yield* gh.readIssueComments(ref).pipe(
+            Effect.orElseSucceed(() => [])
+          )
+          const feedback = comments
+            .filter((comment) => !comment.body.includes(signature))
+            .map((comment) => ({ author: comment.author, body: comment.body }))
+          const allIssues = yield* gh
+            .listIssues(repo, { state: "all" })
+            .pipe(Effect.orElseSucceed(() => []))
+          const marker = epicChildMarker(intent.issue.number)
+          const shipped = allIssues
+            .filter((issue) => issue.body.includes(marker))
+            .map((issue) => `#${issue.number} ${issue.title}`)
+          return { shipped, feedback }
+        })
+      : undefined
     const startedAtMs = yield* Clock.currentTimeMillis
     const runId = `nightcall-epic-${intent.issue.number}-${startedAtMs}`
     const dependencies = nodeFlowRunnerDependencies()
@@ -61,7 +83,7 @@ export const runEpic = (
     const options = {
       workDir,
       workspace: workDir,
-      userPrompt: epicDecompositionPrompt(intent.issue, handbook),
+      userPrompt: epicDecompositionPrompt(intent.issue, handbook, iteration),
       coder: CliConnectorConfig.make({ ...coder, workingDir: workDir }),
       runId,
       surface: timestampedSurface(),
@@ -78,7 +100,7 @@ export const runEpic = (
           events: context.events,
           agent: "techlead"
         })
-        const reply = yield* techLead.ask(epicDecompositionPrompt(intent.issue, handbook))
+        const reply = yield* techLead.ask(epicDecompositionPrompt(intent.issue, handbook, iteration))
         const children = parseEpicChildren(reply)
         if (children === undefined) {
           yield* gh.writeIssueComment(
@@ -124,7 +146,13 @@ export const runEpic = (
         )
         // Only after every child exists does the epic leave the ready
         // queue — the transition is the last write, keeping retry safe.
-        yield* gh.editIssueLabels(ref, [], [Labels.ready])
+        // An iteration also sheds validate; it returns when the new
+        // children close.
+        yield* gh.editIssueLabels(
+          ref,
+          [],
+          iterating ? [Labels.ready, Labels.validate] : [Labels.ready]
+        )
         yield* Ref.set(outcome, "Shipped")
       })
 

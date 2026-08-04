@@ -22,7 +22,11 @@ export const Labels = {
   // it right now. ready → planned → coded → reviewed → review.
   planned: "factory:planned",
   coded: "factory:coded",
-  reviewed: "factory:reviewed"
+  reviewed: "factory:reviewed",
+  // All of an epic's children are closed: the orchestrator asks the CEO
+  // to validate the shipped result. Comment feedback + re-add ready to
+  // iterate; close the epic if satisfied.
+  validate: "factory:validate"
 } as const
 
 export const budgetLabelPrefix = "factory:budget-"

@@ -18,6 +18,7 @@ const comment = IssueCommentRef.make({ owner: "acme", repo: "widgets", id: 42 })
 const editCollector = (edits: Ref.Ref<ReadonlyArray<string>>): GitHubToolShape => ({
   createPr: () => Effect.die("unused"),
   readIssue: () => Effect.die("unused"),
+  readIssueComments: () => Effect.die("unused"),
   writeIssueComment: () => Effect.die("unused"),
   editIssueComment: (_comment, body) => Ref.update(edits, (existing) => [...existing, body]),
   writePrComment: () => Effect.die("unused"),

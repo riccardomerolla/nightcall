@@ -93,7 +93,16 @@ export const isEpicChild = (body: string): boolean => /Parent: #\d+ \(epic\)\s*$
 
 export const maxEpicChildren = 5
 
-export const epicDecompositionPrompt = (issue: IssueSummary, handbook: string): string =>
+export interface EpicIteration {
+  readonly shipped: ReadonlyArray<string>
+  readonly feedback: ReadonlyArray<{ readonly author: string; readonly body: string }>
+}
+
+export const epicDecompositionPrompt = (
+  issue: IssueSummary,
+  handbook: string,
+  iteration?: EpicIteration
+): string =>
   [
     harnessPreamble,
     "",
@@ -105,6 +114,19 @@ export const epicDecompositionPrompt = (issue: IssueSummary, handbook: string): 
     `Epic #${issue.number}: ${issue.title}`,
     "",
     issue.body,
+    ...(iteration === undefined
+      ? []
+      : [
+          "",
+          "This is an ITERATION on the epic. Already shipped and merged:",
+          ...iteration.shipped.map((title) => `- ${title}`),
+          "",
+          "The CEO reviewed the shipped result and left this feedback:",
+          ...iteration.feedback.map((entry) => `${entry.author}: ${entry.body}`),
+          "",
+          "Decompose ONLY the work needed to address the feedback — do not",
+          "re-plan what already shipped."
+        ]),
     "",
     "Format your reply as repeated blocks, nothing before the first block:",
     "CHILD: <one-line title>",

@@ -10,6 +10,7 @@ import {
   type IssueRef
 } from "@llm4ts/flow/GitHubTool"
 import type { CompanyConfig, TargetRepo } from "./Config.ts"
+import { watchEpics } from "./EpicWatch.ts"
 import { LedgerEntry, appendLedger, readLedger, spentToday } from "./Ledger.ts"
 import { Labels, claim, isEpic, phaseOf, signed, stageClaim } from "./Protocol.ts"
 
@@ -236,6 +237,10 @@ export const heartbeat = (
         `${decision.claims.length} claimable, ${decision.epics.length} epic(s) to decompose` +
         (decision.throttled ? ", daily budget exhausted — not claiming" : "")
     )
+
+    if (options.claimMode) {
+      yield* Effect.ignore(watchEpics(gh, config.targets, events))
+    }
 
     const worked: Array<{ intent: ClaimIntent; report: WorkerReport }> = []
     for (const epic of decision.epics) {

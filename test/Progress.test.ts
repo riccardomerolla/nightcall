@@ -12,6 +12,7 @@ const commentCollector = (
 ): GitHubToolShape => ({
   createPr: () => Effect.die("unused"),
   readIssue: () => Effect.die("unused"),
+  readIssueComments: () => Effect.die("unused"),
   writeIssueComment: (_ref, body) =>
     Ref.update(comments, (existing) => [...existing, body]).pipe(Effect.as(undefined)),
   editIssueComment: () => Effect.die("unused"),

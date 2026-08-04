@@ -115,6 +115,7 @@ backlog self-triage).
 | `factory:planned`    | staged pipeline: plan posted, ready for coder | orchestrator |
 | `factory:coded`      | staged pipeline: implemented, ready for reviewer | orchestrator |
 | `factory:reviewed`   | staged pipeline: reviewed, ready for QA | orchestrator |
+| `factory:validate`   | epic's children all shipped; CEO review — comment feedback + re-add ready to iterate, or close | orchestrator |
 
 - Claim = remove `ready`, add `wip`, self-assign, comment the plan — the
   first write the orchestrator makes for an issue.
