@@ -505,10 +505,34 @@ export const runStage = (
           yield* Effect.ignore(
             run(["git", "-C", worktree, "push", "-u", "origin", branch], workspaceDir)
           )
+          const cells = yield* Ref.get(cellsRef)
+          if (error._tag === "BudgetExceeded") {
+            // Running out of budget is a governance pause, not an
+            // engineering failure: the committed work stands, no attempt
+            // is burned. The CEO approves more spend with a budget label.
+            yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.needsInfo], [Labels.wip]))
+            yield* tell(
+              gh,
+              ref,
+              [
+                `Budget exhausted during the ${stage} stage: this issue's`,
+                `budget is $${budgetUsd.toFixed(2)} and the run exceeded it.`,
+                "Completed work is committed and pushed on the branch.",
+                "",
+                `To authorize more: add \`factory:budget-${Math.ceil(budgetUsd * 2)}\``,
+                "(or any factory:budget-N) plus the stage's queue label",
+                `(\`factory:${stage === "plan" ? "ready" : stage === "code" ? "planned" : stage === "review" ? "coded" : "reviewed"}\`) and remove factory:needs-info.`,
+                "Or close/reassign if the spend is not worth it.",
+                "",
+                renderInvoice(cells, budgetUsd)
+              ].join("\n")
+            )
+            yield* Ref.set(outcome, "Bounced")
+            return
+          }
           const attempt = attemptOf(intent.issue.labels) + 1
           yield* Effect.ignore(gh.editIssueLabels(ref, fail.add, fail.remove))
           yield* Effect.ignore(gh.editIssueLabels(ref, [attemptLabel(attempt)], []))
-          const cells = yield* Ref.get(cellsRef)
           yield* tell(
             gh,
             ref,
