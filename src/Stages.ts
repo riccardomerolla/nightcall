@@ -786,24 +786,45 @@ export const runMend = (
       }
     }
 
-    // Rebase complete — re-gate, then heal the PR in place.
-    if (gate !== undefined && gate.length > 0) {
-      const gateOk = yield* attempt(run(["sh", "-lc", `cd '${worktree}' && ${gate}`], workspaceDir))
-      if (!gateOk) {
-        yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], [Labels.wip]))
-        yield* tell(
-          gh,
-          ref,
-          "Mend failed: the branch rebased onto main but the gate went red. " +
-            "Strip factory:failed to retry, or inspect the branch."
-        )
-        return { outcome: "Failed" as const, costUsd: totalCost(yield* Ref.get(cellsRef)) }
-      }
-    }
+    // Rebase complete — PUSH FIRST, gate second. The rebase itself is
+    // good; leaving it unpushed forked the worktree from the remote and
+    // broke every later stage's plain push (issue #40). A red gate then
+    // means "don't auto-merge", with the PR honestly conflicted-free and
+    // CI showing the truth.
     yield* run(
       ["git", "-C", worktree, "push", "--force-with-lease", "origin", branch],
       workspaceDir
     ).pipe(Effect.orElseSucceed(() => ""))
+    if (gate !== undefined && gate.length > 0) {
+      const gateFailure = yield* run(
+        ["sh", "-lc", `cd '${worktree}' && ${gate}`],
+        workspaceDir
+      ).pipe(
+        Effect.map((): string | undefined => undefined),
+        Effect.catch((error) =>
+          Effect.succeed("detail" in error ? String(error.detail) : error.message)
+        )
+      )
+      if (gateFailure !== undefined) {
+        yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], [Labels.wip]))
+        yield* tell(
+          gh,
+          ref,
+          [
+            "Mend: the branch is rebased onto main and pushed, but the gate",
+            "went red — auto-merge is held. Gate output (tail):",
+            "",
+            "```",
+            gateFailure.slice(-1200),
+            "```",
+            "",
+            "Strip factory:failed and add factory:planned (with guidance if",
+            "needed) to run a fix round, or inspect the branch."
+          ].join("\n")
+        )
+        return { outcome: "Failed" as const, costUsd: totalCost(yield* Ref.get(cellsRef)) }
+      }
+    }
     const cells = yield* Ref.get(cellsRef)
     yield* tell(
       gh,
