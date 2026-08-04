@@ -496,10 +496,6 @@ export const runStage = (
         run(["git", "-C", worktree, "log", "--oneline", "origin/HEAD..HEAD"], workspaceDir),
         () => ""
       )
-      const filesChanged = yield* Effect.orElseSucceed(
-        run(["git", "-C", worktree, "diff", "--stat", "origin/HEAD...HEAD"], workspaceDir),
-        () => ""
-      )
       const worktreeGh = makeGitHubTool(nodeProcessExecutor, worktree, events)
       yield* Effect.ignore(
         Effect.gen(function* () {
@@ -509,7 +505,6 @@ export const runStage = (
               qaSummary: summary,
               taskTitles,
               commits,
-              filesChanged,
               gateCommand: gate,
               invoice
             })

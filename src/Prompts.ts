@@ -232,7 +232,9 @@ export const qaPrompt = (
     "```",
     "",
     "The first line of your reply must be exactly one of:",
-    "VERDICT: APPROVE — followed by a one-paragraph review summary;",
+    "VERDICT: APPROVE — followed by two labeled lines:",
+    "Feature: <one paragraph, user-facing — what this change delivers and why it matters>",
+    "Review: <one paragraph — your review summary of the implementation>;",
     "VERDICT: REJECT — followed by concrete, fixable findings (an engineer",
     "will address them in another iteration); or",
     "VERDICT: CLARIFY — followed by the questions only the issue's author",
@@ -273,6 +275,34 @@ export const guidanceSince = (
     .filter((comment) => !comment.body.includes(reportSignature))
 }
 
+// An APPROVE verdict carries "Feature:" (user-facing, lands in the PR
+// body's What-this-delivers) and "Review:" (the reviewer's summary).
+// Tolerant of order and absence: unlabeled text counts as review.
+export const splitQaSummary = (
+  summary: string
+): { readonly feature: string; readonly review: string } => {
+  const lines = summary.split(/\r?\n/)
+  const feature: Array<string> = []
+  const review: Array<string> = []
+  let bucket: Array<string> = review
+  for (const line of lines) {
+    const cleaned = line.replace(/[*_#>`]/g, "").trim()
+    if (cleaned.toUpperCase().startsWith("FEATURE:")) {
+      bucket = feature
+      feature.push(cleaned.slice("FEATURE:".length).trim())
+    } else if (cleaned.toUpperCase().startsWith("REVIEW:")) {
+      bucket = review
+      review.push(cleaned.slice("REVIEW:".length).trim())
+    } else {
+      bucket.push(line)
+    }
+  }
+  return {
+    feature: feature.join("\n").trim(),
+    review: review.join("\n").trim()
+  }
+}
+
 const cost = (cell: CostCell): number => cell.costUsd ?? 0
 
 export const renderInvoice = (
@@ -306,7 +336,6 @@ export interface PrContext {
   readonly qaSummary: string
   readonly taskTitles: ReadonlyArray<string>
   readonly commits: string
-  readonly filesChanged: string
   readonly gateCommand: string | undefined
   readonly invoice: string
 }
@@ -315,9 +344,15 @@ export interface PrContext {
 // thread: what was asked, what was done, and how it was verified — built
 // deterministically from the plan, the git history, and the gate, so a
 // terse QA reply can never leave the PR empty.
-export const prBody = (issue: IssueSummary, context: PrContext): string =>
-  [
+export const prBody = (issue: IssueSummary, context: PrContext): string => {
+  const { feature, review } = splitQaSummary(context.qaSummary)
+  return [
     `Closes #${issue.number} — ${issue.title}.`,
+    "",
+    "## What this delivers",
+    feature.length === 0
+      ? issue.body.split(/\r?\n/).find((line) => line.trim().length > 0) ?? "(see the issue)"
+      : feature,
     "",
     "## What changed",
     ...(context.taskTitles.length === 0
@@ -327,17 +362,13 @@ export const prBody = (issue: IssueSummary, context: PrContext): string =>
     "## Commits",
     context.commits.trim().length === 0 ? "(none listed)" : context.commits,
     "",
-    "## Files",
-    context.filesChanged.trim().length === 0 ? "(none listed)" : context.filesChanged,
-    "",
     "## Verification",
     context.gateCommand === undefined || context.gateCommand.length === 0
       ? "- Gate: not configured for this run; PR CI is the gate."
       : `- Gate green before review: \`${context.gateCommand}\``,
     "- QA (fresh-context review of the full diff): " +
-      (context.qaSummary.trim().length === 0
-        ? "approved without additional notes."
-        : context.qaSummary.trim()),
+      (review.length === 0 ? "approved without additional notes." : review),
     "",
     context.invoice
   ].join("\n")
+}

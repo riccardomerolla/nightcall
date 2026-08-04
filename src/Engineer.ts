@@ -481,10 +481,6 @@ export const runIssue = (
         run(["git", "-C", worktree, "log", "--oneline", "origin/HEAD..HEAD"], workspaceDir),
         () => ""
       )
-      const filesChanged = yield* Effect.orElseSucceed(
-        run(["git", "-C", worktree, "diff", "--stat", "origin/HEAD...HEAD"], workspaceDir),
-        () => ""
-      )
       // PR creation runs gh in the worktree so the head branch is inferred
       // from the issue's own checkout, not the daemon's.
       const worktreeGh = makeGitHubTool(nodeProcessExecutor, worktree, events)
@@ -496,7 +492,6 @@ export const runIssue = (
               qaSummary: summary,
               taskTitles,
               commits,
-              filesChanged,
               gateCommand: gate,
               invoice
             })

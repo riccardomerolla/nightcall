@@ -3,6 +3,7 @@ import { CostCell } from "@llm4ts/flow/CostLedger"
 import { IssueSummary } from "@llm4ts/flow/GitHubTool"
 import {
   guidanceSince,
+  splitQaSummary,
   isEpicChild,
   parseEpicChildren,
   parseQa,
@@ -104,30 +105,39 @@ describe("Prompts", () => {
     assert.include(renderInvoice([], 5), "(no usage reported)")
 
     const body = prBody(issue, {
-      qaSummary: "Solid change.",
+      qaSummary:
+        "Feature: Users can now see the CLI version at a glance.\nReview: Solid change.",
       taskTitles: ["Add kebabCase", "Cover kebabCase with tests"],
       commits: "abc123 add kebabCase",
-      filesChanged: "src/strcase.js | 10 ++++",
       gateCommand: "npm run gate",
       invoice
     })
     assert.include(body, "Closes #7 — Add a --version flag.")
+    assert.include(body, "## What this delivers")
+    assert.include(body, "Users can now see the CLI version at a glance.")
     assert.include(body, "- Add kebabCase")
     assert.include(body, "abc123 add kebabCase")
     assert.include(body, "`npm run gate`")
     assert.include(body, "Solid change.")
+    assert.notInclude(body, "## Files")
     assert.include(body, "### Invoice")
 
     const sparse = prBody(issue, {
       qaSummary: "",
       taskTitles: [],
       commits: "",
-      filesChanged: "",
       gateCommand: undefined,
       invoice
     })
+    // No Feature line from QA: the issue's first line stands in.
+    assert.include(sparse, "The CLI should print its version.")
     assert.include(sparse, "approved without additional notes.")
     assert.include(sparse, "PR CI is the gate.")
+
+    const split = splitQaSummary("Review: fine.\nFeature: dark mode everywhere.")
+    assert.strictEqual(split.feature, "dark mode everywhere.")
+    assert.strictEqual(split.review, "fine.")
+    assert.strictEqual(splitQaSummary("plain words").review, "plain words")
   })
 
   it("parses epic decomposition replies into children", () => {
