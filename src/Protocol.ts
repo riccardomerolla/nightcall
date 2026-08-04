@@ -26,7 +26,11 @@ export const Labels = {
   // All of an epic's children are closed: the orchestrator asks the CEO
   // to validate the shipped result. Comment feedback + re-add ready to
   // iterate; close the epic if satisfied.
-  validate: "factory:validate"
+  validate: "factory:validate",
+  // CEO override, human-only: skip the QA verdict and ship. For the rare
+  // dispute where the CEO judges the work done and QA will not approve.
+  // Stripped when consumed.
+  ship: "factory:ship"
 } as const
 
 export const budgetLabelPrefix = "factory:budget-"

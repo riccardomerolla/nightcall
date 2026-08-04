@@ -296,6 +296,18 @@ export const runStage = (
 
     const qaBody = (context: FlowContextShape): Effect.Effect<void, FlowError> =>
       Effect.gen(function* () {
+        // CEO override: factory:ship skips the QA verdict entirely — the
+        // human has judged the work done. Recorded in the PR body.
+        if (intent.issue.labels.includes(Labels.ship)) {
+          yield* Ref.set(
+            qaSummary,
+            "Review: shipped by CEO override (factory:ship); the QA verdict was waived."
+          )
+          yield* Effect.ignore(gh.editIssueLabels(ref, [], [Labels.ship]))
+          yield* context.git.push("origin", branch)
+          yield* Ref.set(outcome, "Shipped")
+          return
+        }
         const base = yield* context.git.defaultBase
         const diff = yield* context.git.diffVsBase(base, true)
         // The plan is the authorized scope: QA judges the diff against it,
