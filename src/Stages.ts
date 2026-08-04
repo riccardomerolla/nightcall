@@ -269,6 +269,19 @@ export const runStage = (
       Effect.gen(function* () {
         const base = yield* context.git.defaultBase
         const diff = yield* context.git.diffVsBase(base, true)
+        // The plan is the authorized scope: QA judges the diff against it,
+        // not against a scope it re-derives (a QA once rejected the EUR 500
+        // deferral rule the plan explicitly ordered).
+        const planned = yield* Effect.orElseSucceed(store.load(planPath), () => undefined)
+        const criteria =
+          planned === undefined
+            ? ""
+            : [
+                "The plan below was approved at the plan stage; everything in",
+                "it is IN scope by definition.",
+                "",
+                ...planned.tasks.map((task) => `- ${task.title}: ${task.description}`)
+              ].join("\n")
         const qa = yield* makeChat(context.reasoning, { events: context.events, agent: "qa" })
         const repoFiles = yield* Effect.orElseSucceed(
           run(["git", "-C", worktree, "ls-files"], workspaceDir).pipe(
@@ -279,7 +292,7 @@ export const runStage = (
         const reply =
           diff.trim().length === 0
             ? undefined
-            : yield* qa.ask(qaPrompt(intent.issue, "", diff, repoFiles))
+            : yield* qa.ask(qaPrompt(intent.issue, criteria, diff, repoFiles))
         const verdict =
           reply === undefined
             ? { approved: false, findings: "The change produced an empty diff." }
