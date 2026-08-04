@@ -480,3 +480,201 @@ export const runStage = (
       )
     )
   )
+
+// Mend: keep open PRs mergeable as main moves. Cheap and LLM-free when the
+// branch already contains origin/HEAD; otherwise rebase, and when the
+// rebase conflicts, a coder agent resolves the markers file-by-file before
+// the rebase continues. The branch is force-pushed (with lease) so the PR
+// heals in place. Failure marks factory:failed but keeps factory:review,
+// so a human can strip failed to retry after the queue settles.
+export const runMend = (
+  gh: GitHubToolShape,
+  intent: ClaimIntent,
+  config: CompanyConfig,
+  environment: Readonly<Record<string, string | undefined>>,
+  events: FlowEventsShape,
+  gitLock: Semaphore.Semaphore
+): Effect.Effect<WorkerReport> =>
+  Effect.gen(function* () {
+    const ref = intent.issue.ref(repoRefOf(intent.target))
+    const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
+    const { repoDir, worktree } = issuePaths(workspaceDir, intent)
+    const branch = branchFor(intent.issue.number)
+    const gate = environment["NIGHTCALL_GATE"]?.trim()
+    const unclaim = Effect.ignore(gh.editIssueLabels(ref, [], [Labels.wip]))
+    const attempt = (effect: Effect.Effect<string, FlowError>): Effect.Effect<boolean> =>
+      effect.pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false)
+      )
+
+    const prepared = yield* gitLock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* run(["git", "-C", repoDir, "fetch", "origin", "--prune"], workspaceDir)
+        const hasWorktree = yield* attempt(run(["git", "-C", worktree, "rev-parse", "HEAD"], workspaceDir))
+        if (!hasWorktree) {
+          // Recreate from the PUSHED branch — never from origin/HEAD, which
+          // would silently discard the PR's commits.
+          return yield* attempt(
+            run(
+              ["git", "-C", repoDir, "worktree", "add", "-B", branch, worktree, `origin/${branch}`],
+              workspaceDir
+            )
+          )
+        }
+        return true
+      })
+    ).pipe(Effect.orElseSucceed(() => false))
+    if (!prepared) {
+      yield* unclaim
+      return { outcome: "Failed" as const, costUsd: 0 }
+    }
+
+    const upToDate = yield* attempt(
+      run(["git", "-C", worktree, "merge-base", "--is-ancestor", "origin/HEAD", "HEAD"], workspaceDir)
+    )
+    if (upToDate) {
+      yield* unclaim
+      return { outcome: "Advanced" as const, costUsd: 0 }
+    }
+
+    const rebasedClean = yield* attempt(
+      run(["git", "-C", worktree, "-c", "core.editor=true", "rebase", "origin/HEAD"], workspaceDir)
+    )
+    const cellsRef = yield* Ref.make<ReadonlyArray<CostCell>>([])
+    let resolvedRounds = 0
+
+    if (!rebasedClean) {
+      // Conflicted rebase: spin a runner so a coder agent can resolve the
+      // markers, then continue the rebase — one round per conflicted commit.
+      const startedAtMs = yield* Clock.currentTimeMillis
+      const coder = withTurnLimit(
+        coderFromEnv(environment),
+        positiveIntOr(environment["NIGHTCALL_TURN_LIMIT"], 50)
+      )
+      const options = {
+        workDir: worktree,
+        workspace: worktree,
+        userPrompt: `Resolve rebase conflicts for #${intent.issue.number}`,
+        coder: CliConnectorConfig.make({ ...coder, workingDir: worktree }),
+        runId: `nightcall-mend-${intent.issue.number}-${startedAtMs}`,
+        surface: timestampedSurface(),
+        verbosity: parseVerbosity(environment["LLM4TS_VERBOSITY"] ?? "verbose")
+      }
+      const dependencies = nodeFlowRunnerDependencies()
+      const outcomeOk = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const bundle = yield* makeFlowRunnerContext(options, dependencies)
+          const tracker = yield* makeCostTracker()
+          yield* tracker.consume(bundle.events)
+          const body = (context: FlowContextShape): Effect.Effect<void, FlowError> =>
+            Effect.gen(function* () {
+              for (let round = 0; round < 5; round += 1) {
+                const conflicted = yield* run(
+                  ["git", "-C", worktree, "diff", "--name-only", "--diff-filter=U"],
+                  workspaceDir
+                ).pipe(Effect.orElseSucceed(() => ""))
+                if (conflicted.trim().length === 0) {
+                  break
+                }
+                resolvedRounds += 1
+                const chat = yield* makeChat(context.coder, {
+                  events: context.events,
+                  agent: "coder",
+                  system: noopRule
+                })
+                yield* chat.ask(
+                  [
+                    "A git rebase onto origin/HEAD is paused on conflicts in",
+                    "this repository checkout. Conflicted files:",
+                    conflicted,
+                    "",
+                    "Edit each conflicted file to resolve every <<<<<<< marker,",
+                    "preserving BOTH intents: the changes already merged to",
+                    "main and this branch's changes. Do not run any git",
+                    "commands (no add, no commit, no rebase); only edit files.",
+                    "Reply DONE when every marker is gone."
+                  ].join("\n")
+                )
+                yield* run(["git", "-C", worktree, "add", "-A"], workspaceDir)
+                yield* Effect.ignore(
+                  run(
+                    ["git", "-C", worktree, "-c", "core.editor=true", "rebase", "--continue"],
+                    workspaceDir
+                  )
+                )
+              }
+              const stillRebasing = yield* attempt(
+                run(["git", "-C", worktree, "rev-parse", "--verify", "REBASE_HEAD"], workspaceDir)
+              )
+              if (stillRebasing) {
+                return yield* Effect.fail(
+                  ProcessError.make({
+                    message: "mend rebase",
+                    detail: "conflicts persisted after 5 resolution rounds; rebase aborted"
+                  })
+                )
+              }
+            })
+          yield* runWithBundle(bundle, options, body, dependencies).pipe(
+            Effect.ensuring(
+              tracker
+                .awaitDrained(bundle.events)
+                .pipe(
+                  Effect.andThen(tracker.cells),
+                  Effect.flatMap((cells) => Ref.set(cellsRef, cells)),
+                  Effect.ignore
+                )
+            )
+          )
+        })
+      ).pipe(
+        Effect.as(true),
+        Effect.catch(() => Effect.succeed(false))
+      )
+      if (!outcomeOk) {
+        yield* Effect.ignore(
+          run(["git", "-C", worktree, "rebase", "--abort"], workspaceDir)
+        )
+        const cells = yield* Ref.get(cellsRef)
+        yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], [Labels.wip]))
+        yield* tell(
+          gh,
+          ref,
+          "Mend failed: the rebase onto main could not be resolved automatically. " +
+            "The branch is unchanged; strip factory:failed to retry, or resolve manually.\n\n" +
+            renderInvoice(cells, config.issueBudgetUsd)
+        )
+        return { outcome: "Failed" as const, costUsd: totalCost(cells) }
+      }
+    }
+
+    // Rebase complete — re-gate, then heal the PR in place.
+    if (gate !== undefined && gate.length > 0) {
+      const gateOk = yield* attempt(run(["sh", "-lc", `cd '${worktree}' && ${gate}`], workspaceDir))
+      if (!gateOk) {
+        yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], [Labels.wip]))
+        yield* tell(
+          gh,
+          ref,
+          "Mend failed: the branch rebased onto main but the gate went red. " +
+            "Strip factory:failed to retry, or inspect the branch."
+        )
+        return { outcome: "Failed" as const, costUsd: totalCost(yield* Ref.get(cellsRef)) }
+      }
+    }
+    yield* run(
+      ["git", "-C", worktree, "push", "--force-with-lease", "origin", branch],
+      workspaceDir
+    ).pipe(Effect.orElseSucceed(() => ""))
+    const cells = yield* Ref.get(cellsRef)
+    yield* tell(
+      gh,
+      ref,
+      resolvedRounds === 0
+        ? "Rebased onto main cleanly; the PR is mergeable again."
+        : `Rebased onto main; the coder resolved conflicts across ${resolvedRounds} round(s). The PR is mergeable again.\n\n${renderInvoice(cells, config.issueBudgetUsd)}`
+    )
+    yield* unclaim
+    return { outcome: "Advanced" as const, costUsd: totalCost(cells) }
+  })

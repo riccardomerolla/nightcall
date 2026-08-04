@@ -26,6 +26,7 @@ export interface TargetSnapshot {
   readonly planned: ReadonlyArray<IssueSummary>
   readonly coded: ReadonlyArray<IssueSummary>
   readonly reviewed: ReadonlyArray<IssueSummary>
+  readonly inReview: ReadonlyArray<IssueSummary>
 }
 
 export interface ClaimIntent {
@@ -33,7 +34,7 @@ export interface ClaimIntent {
   readonly issue: IssueSummary
 }
 
-export type Stage = "plan" | "code" | "review" | "qa"
+export type Stage = "plan" | "code" | "review" | "qa" | "mend"
 
 export interface HeartbeatDecision {
   readonly claims: ReadonlyArray<ClaimIntent>
@@ -62,6 +63,7 @@ export const poll = (
       const planned = yield* byLabel(Labels.planned)
       const coded = yield* byLabel(Labels.coded)
       const reviewed = yield* byLabel(Labels.reviewed)
+      const inReview = yield* byLabel(Labels.review)
       // Queries are label-based; phaseOf re-checks precedence so an issue
       // carrying leftover markers is never claimed at two stages at once.
       const inPhase = (
@@ -74,7 +76,8 @@ export const poll = (
         wip: inPhase(wip, "InProgress"),
         planned: inPhase(planned, "Planned"),
         coded: inPhase(coded, "Coded"),
-        reviewed: inPhase(reviewed, "Reviewed")
+        reviewed: inPhase(reviewed, "Reviewed"),
+        inReview: inPhase(inReview, "InReview")
       }
     })
   )
@@ -129,6 +132,10 @@ export const decide = (
     claims,
     epics,
     stages: {
+      // Mend first: an open PR knocked out of mergeability by a sibling
+      // merge is repaired (rebase + agent conflict resolution) before new
+      // work piles more branches onto the same base.
+      mend: takeStage((snapshot) => snapshot.inReview, 1),
       plan: claims.slice(0, 1),
       code: takeStage((snapshot) => snapshot.planned, config.engineerParallelism),
       review: takeStage((snapshot) => snapshot.coded, 1),

@@ -8,7 +8,7 @@ import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { configFromEnv } from "./Config.ts"
 import { runIssue } from "./Engineer.ts"
 import { heartbeat, type ClaimIntent, type Stage, type WorkerReport } from "./Heartbeat.ts"
-import { runStage } from "./Stages.ts"
+import { runMend, runStage } from "./Stages.ts"
 import { runEpic } from "./TechLead.ts"
 
 // The Chief of Staff daemon: decode config, then run the idempotent
@@ -51,7 +51,9 @@ const program = Effect.gen(function* () {
             plan: stageWorker("plan"),
             code: stageWorker("code"),
             review: stageWorker("review"),
-            qa: stageWorker("qa")
+            qa: stageWorker("qa"),
+            mend: (intent: ClaimIntent) =>
+              runMend(gh, intent, config, process.env, loggingEvents, gitLock)
           }
         }
       : {}),

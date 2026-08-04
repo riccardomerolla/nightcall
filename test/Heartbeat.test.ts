@@ -28,7 +28,7 @@ const config = CompanyConfig.make({
   engineerParallelism: 1
 })
 
-const empty = { planned: [], coded: [], reviewed: [] }
+const empty = { planned: [], coded: [], reviewed: [], inReview: [] }
 
 const summary = (number: number, labels: ReadonlyArray<string>): IssueSummary =>
   IssueSummary.make({
@@ -81,7 +81,8 @@ describe("Heartbeat", () => {
         wip: [],
         planned: [summary(31, [Labels.planned]), summary(32, [Labels.planned])],
         coded: [summary(33, [Labels.coded])],
-        reviewed: [summary(34, [Labels.reviewed])]
+        reviewed: [summary(34, [Labels.reviewed])],
+        inReview: [summary(35, [Labels.review])]
       }
     ]
     const decision = decide(snapshots, config)
@@ -101,6 +102,10 @@ describe("Heartbeat", () => {
     assert.deepStrictEqual(
       decision.stages.qa.map((intent) => intent.issue.number),
       [34]
+    )
+    assert.deepStrictEqual(
+      decision.stages.mend.map((intent) => intent.issue.number),
+      [35]
     )
     const throttled = decide(snapshots, config, 25)
     assert.deepStrictEqual(throttled.stages.code, [])
@@ -137,6 +142,10 @@ describe("Heartbeat", () => {
           [
             processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.reviewed] })]),
             listJson(`[${row(43, Labels.reviewed)}]`)
+          ],
+          [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.review] })]),
+            listJson("[]")
           ],
           [
             processCommandKey([
@@ -181,7 +190,8 @@ describe("Heartbeat", () => {
           plan: stageWorker("plan"),
           code: stageWorker("code"),
           review: stageWorker("review"),
-          qa: stageWorker("qa")
+          qa: stageWorker("qa"),
+          mend: stageWorker("mend")
         }
       })
       assert.deepStrictEqual([...ran].sort(), ["code:41", "qa:43", "review:42"])
@@ -224,6 +234,10 @@ describe("Heartbeat", () => {
             listJson("[]")
           ],
           [
+            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.review] })]),
+            listJson("[]")
+          ],
+          [
             processCommandKey([
               "gh",
               ...issueEditLabelsArgs(issueRef, [Labels.wip], [Labels.ready])
@@ -257,7 +271,7 @@ describe("Heartbeat", () => {
       assert.deepStrictEqual(epicReports, [5])
 
       assert.strictEqual(observed.claims.length, 1)
-      assert.strictEqual(readOnlyCalls, 5)
+      assert.strictEqual(readOnlyCalls, 6)
       assert.strictEqual(claimed.claims.length, 1)
       const issue = summary(3, [Labels.ready]).ref(repo)
       const editKey = processCommandKey([
