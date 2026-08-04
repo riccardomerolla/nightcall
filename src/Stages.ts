@@ -37,6 +37,7 @@ import {
   totalCost
 } from "./Engineer.ts"
 import { repoRefOf, type ClaimIntent, type Stage, type WorkerReport } from "./Heartbeat.ts"
+import { loadCommentRef, makeChecklistEvents, renderChecklist, saveCommentRef } from "./Checklist.ts"
 import { makeProgressEvents } from "./Progress.ts"
 import {
   engineerBrief,
@@ -95,6 +96,7 @@ export const runStage = (
       catch: (error) => ProcessError.make({ message: "mkdir state", detail: String(error) })
     })
     const planPath = join(stateDir, `issue-${intent.issue.number}-plan.md`)
+    const planCommentPath = join(stateDir, `issue-${intent.issue.number}-plan-comment.json`)
 
     if (stage === "plan" && isFresh(intent.issue.labels)) {
       yield* resetIssueState(workspaceDir, intent, planPath)
@@ -170,10 +172,22 @@ export const runStage = (
         const plan = yield* store
           .recoverOrCreate(planPath, planFrom(context.reasoning, brief))
           .pipe(Effect.map(pruneNonCodingTasks))
-        yield* context.hosting.writeIssueComment(
+        // The plan is posted as ONE task-list comment; its reference is
+        // persisted so the code stage keeps checking items off by editing
+        // the same comment.
+        const commentRef = yield* context.hosting.writeIssueComment(
           ref,
-          signed(`Plan (${plan.tasks.length} task(s)):\n\n${plan.render}`)
+          renderChecklist(
+            plan.epicId,
+            plan.tasks.map((task) => ({
+              title: task.title,
+              progress: task.completed ? ("done" as const) : ("pending" as const)
+            }))
+          )
         )
+        if (commentRef !== undefined) {
+          yield* saveCommentRef(planCommentPath, commentRef)
+        }
         yield* context.hosting.editIssueLabels(ref, donePlan.add, donePlan.remove)
         yield* Ref.set(outcome, "Advanced")
       })
@@ -189,7 +203,20 @@ export const runStage = (
             })
           )
         }
-        const progress = yield* makeProgressEvents(context.events, context.hosting, ref)
+        // Prefer the living checklist (edit the plan comment as tasks
+        // complete); fall back to per-task tick comments when the plan
+        // stage could not capture a comment reference.
+        const commentRef = yield* loadCommentRef(planCommentPath)
+        const progress =
+          commentRef === undefined
+            ? yield* makeProgressEvents(context.events, context.hosting, ref)
+            : yield* makeChecklistEvents(
+                context.events,
+                context.hosting,
+                commentRef,
+                persisted.epicId,
+                persisted.tasks.map((task) => ({ title: task.title, completed: task.completed }))
+              )
         yield* implementPlanFlow(
           { ...context, events: progress },
           {
