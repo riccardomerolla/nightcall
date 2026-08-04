@@ -262,6 +262,11 @@ export const runIssue = (
     // before the CLI died — without bounds, one degenerate task holds the
     // company's only seat for hours.
     const turnLimit = positiveIntOr(environment["NIGHTCALL_TURN_LIMIT"], 50)
+    // Internal review is triple-checked downstream (fresh-context QA, PR
+    // CI), so default to a single round; NIGHTCALL_INTERNAL_REVIEW=off
+    // skips the reviewer seats entirely and leaves the lint gate.
+    const maxRounds = positiveIntOr(environment["NIGHTCALL_MAX_ROUNDS"], 1)
+    const internalReview = environment["NIGHTCALL_INTERNAL_REVIEW"] !== "off"
     const timeoutMinutes = positiveIntOr(environment["NIGHTCALL_ISSUE_TIMEOUT_MINUTES"], 30)
     const coder = withTurnLimit(coderFromEnv(environment), turnLimit)
     const options = {
@@ -332,7 +337,8 @@ export const runIssue = (
           // no-op task completes with a notice instead of sinking the run
           // (this exact failure burned three attempts on one issue).
           noopTaskPolicy: "complete",
-          maxRounds: 3,
+          ...(internalReview ? {} : { reviewers: [] }),
+          maxRounds,
           ...(gate === undefined || gate.length === 0
             ? {}
             : {

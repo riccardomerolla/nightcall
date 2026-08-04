@@ -154,6 +154,9 @@ export const engineerBrief = (
     "Planning rules: plan only tasks that create or modify files in this",
     "repository. Never plan verification, gate, build, or test-run tasks —",
     "the harness runs the full CI gate automatically after every task.",
+    "While implementing, run at most one targeted test command yourself;",
+    "never run the full gate or build — the harness does that after your",
+    "turn, and duplicate runs only burn the clock.",
     ...(handbook.trim().length === 0 ? [] : ["", "Company handbook:", handbook])
   ].join("\n")
 
