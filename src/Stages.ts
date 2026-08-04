@@ -519,7 +519,16 @@ export const runStage = (
             // Running out of budget is a governance pause, not an
             // engineering failure: the committed work stands, no attempt
             // is burned. The CEO approves more spend with a budget label.
-            yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.needsInfo], [Labels.wip]))
+            // Strip every queue label too: the stage checkpoints outrank
+            // needs-info in phase precedence, so leaving them would let
+            // the next beat re-claim the paused issue and keep spending.
+            yield* Effect.ignore(
+              gh.editIssueLabels(
+                ref,
+                [Labels.needsInfo],
+                [Labels.wip, Labels.ready, Labels.planned, Labels.coded, Labels.reviewed]
+              )
+            )
             yield* tell(
               gh,
               ref,
