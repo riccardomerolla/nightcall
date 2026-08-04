@@ -630,6 +630,23 @@ export const runMend = (
             const checks = yield* worktreeGh.prChecks(pr).pipe(
               Effect.orElseSucceed(() => "Pending" as const)
             )
+            if (checks === "Failure" || checks === "TimedOut") {
+              // A red CI run is a real failure, not a waiting state: park
+              // the issue as failed with instructions (the failed phase
+              // also stops mend from re-visiting, so this comments once).
+              yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], []))
+              yield* tell(
+                gh,
+                ref,
+                [
+                  `PR #${pr.number} CI is red (${checks}) — auto-merge is held.`,
+                  `See the checks on ${pr.url}.`,
+                  "Strip factory:failed and add factory:planned (with guidance",
+                  "if useful) to run a fix round, or inspect the branch."
+                ].join("\n")
+              )
+              return false
+            }
             if (checks !== "Success") {
               yield* events.publish(
                 Info.make({
