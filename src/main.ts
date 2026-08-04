@@ -38,7 +38,7 @@ const program = Effect.gen(function* () {
       `${claimMode ? "CLAIM" : "observe"} mode, ${staged ? "staged" : "mono"} pipeline)`
   )
   const stageWorker =
-    (stage: Stage) =>
+    (stage: Exclude<Stage, "mend">) =>
     (intent: ClaimIntent): Effect.Effect<WorkerReport> =>
       runStage(stage, gh, intent, config, process.env, loggingEvents, gitLock)
   const beat = heartbeat(gh, config, loggingEvents, {

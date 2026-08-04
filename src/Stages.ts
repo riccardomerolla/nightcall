@@ -29,6 +29,7 @@ import { parseVerbosity } from "@llm4ts/runner/Terminal"
 import type { CompanyConfig } from "./Config.ts"
 import {
   ensureWorktree,
+  issuePaths,
   positiveIntOr,
   pruneNonCodingTasks,
   readHandbook,
@@ -80,7 +81,7 @@ import { timestampedSurface } from "./Surface.ts"
 // checkpoint so a human retry (strip failed) resumes at the same stage.
 
 export const runStage = (
-  stage: Stage,
+  stage: Exclude<Stage, "mend">,
   gh: GitHubToolShape,
   intent: ClaimIntent,
   config: CompanyConfig,
@@ -369,7 +370,10 @@ export const runStage = (
         yield* Ref.set(outcome, "Shipped")
       })
 
-    const bodies: Record<Stage, (context: FlowContextShape) => Effect.Effect<void, FlowError>> = {
+    const bodies: Record<
+      Exclude<Stage, "mend">,
+      (context: FlowContextShape) => Effect.Effect<void, FlowError>
+    > = {
       plan: planBody,
       code: codeBody,
       review: reviewBody,
