@@ -1,5 +1,5 @@
 import type { CostCell } from "@llm4ts/flow/CostLedger"
-import type { IssueSummary } from "@llm4ts/flow/GitHubTool"
+import type { WorkItemSummary } from "./Hosting.ts"
 
 // Every prompt the company sends and every reply it parses, as pure
 // functions. Verdicts use a single tagged line so parsing is a prefix
@@ -30,17 +30,18 @@ export interface TriageBounce {
 
 export type Triage = TriageAccept | TriageBounce
 
-export const triagePrompt = (issue: IssueSummary): string =>
+export const triagePrompt = (item: WorkItemSummary): string =>
   [
     harnessPreamble,
     "",
     "You are the Tech Lead of a small software company. Triage the",
-    "following GitHub issue. Decide whether it is specified well enough",
+    "following Azure DevOps work item. Decide whether it is specified",
+    "well enough",
     "for an engineer to implement without further input.",
     "",
-    `Issue #${issue.number}: ${issue.title}`,
+    `Work item #${item.id}: ${item.title}`,
     "",
-    issue.body.trim().length === 0 ? "(no body)" : issue.body,
+    item.body.trim().length === 0 ? "(no body)" : item.body,
     "",
     "The first line of your reply must be exactly one of:",
     "VERDICT: ACCEPT — followed by concise acceptance criteria as bullets, or",
@@ -84,13 +85,13 @@ export interface EpicChild {
   readonly title: string
   readonly body: string
   // Ordinals (1-based) of earlier children in the same reply this child
-  // depends on; resolved to real issue numbers at creation time.
+  // depends on; resolved to real work item ids at creation time.
   readonly dependsOn: ReadonlyArray<number>
 }
 
 export const blockedByPrefix = "Blocked-by:"
 
-// Issue numbers this issue must wait for (they must be closed before the
+// Work item ids this item must wait for (they must be closed before the
 // plan/code stages may claim it), parsed from Blocked-by: #12, #13 lines.
 export const blockedByRefs = (body: string): ReadonlyArray<number> =>
   body
@@ -113,7 +114,7 @@ export interface EpicIteration {
 }
 
 export const epicDecompositionPrompt = (
-  issue: IssueSummary,
+  item: WorkItemSummary,
   handbook: string,
   iteration?: EpicIteration
 ): string =>
@@ -121,13 +122,14 @@ export const epicDecompositionPrompt = (
     harnessPreamble,
     "",
     "You are the Tech Lead of a small software company. The CEO marked the",
-    "following GitHub issue as an epic. Decompose it into independently",
-    `implementable child issues — at most ${maxEpicChildren}, in build order`,
+    "following Azure DevOps work item as an epic. Decompose it into",
+    "independently",
+    `implementable child items — at most ${maxEpicChildren}, in build order`,
     "(each child may depend only on earlier children).",
     "",
-    `Epic #${issue.number}: ${issue.title}`,
+    `Epic work item #${item.id}: ${item.title}`,
     "",
-    issue.body,
+    item.body,
     ...(iteration === undefined
       ? []
       : [
@@ -144,7 +146,7 @@ export const epicDecompositionPrompt = (
     "",
     "Format your reply as repeated blocks, nothing before the first block:",
     "CHILD: <one-line title>",
-    "<the child issue body: concrete deliverables and acceptance criteria,",
+    "<the child item body: concrete deliverables and acceptance criteria,",
     "including the verification command the epic requires>",
     "",
     "Rules: no markdown decoration on CHILD lines; every child must name",
@@ -198,17 +200,17 @@ export const parseEpicChildren = (reply: string): ReadonlyArray<EpicChild> | und
 }
 
 export const engineerBrief = (
-  issue: IssueSummary,
+  item: WorkItemSummary,
   criteria: string,
   handbook: string
 ): string =>
   [
-    `Implement GitHub issue #${issue.number}: ${issue.title}`,
+    `Implement Azure DevOps work item #${item.id}: ${item.title}`,
     "",
-    issue.body,
+    item.body,
     "",
     "Acceptance criteria from the Tech Lead:",
-    criteria.trim().length === 0 ? "(none beyond the issue text)" : criteria,
+    criteria.trim().length === 0 ? "(none beyond the item text)" : criteria,
     "",
     "Planning rules: plan only tasks that create or modify files in this",
     "repository. Never plan verification, gate, build, or test-run tasks —",
@@ -239,7 +241,7 @@ export type QaVerdict =
   | { readonly kind: "Clarify"; readonly questions: string }
 
 export const qaPrompt = (
-  issue: IssueSummary,
+  item: WorkItemSummary,
   criteria: string,
   diff: string,
   repoFiles = ""
@@ -248,17 +250,17 @@ export const qaPrompt = (
     harnessPreamble,
     "",
     "You are the QA reviewer of a small software company, seeing this",
-    "change for the first time. Review the diff against the issue and the",
+    "change for the first time. Review the diff against the item and the",
     "acceptance criteria. Judge correctness and scope only — style nits",
     "are not rejection grounds. The diff applies on top of the existing",
     "repository: files in the listing below already exist even when the",
     "diff does not touch them — never reject for something the listing",
     "already provides.",
     "",
-    `Issue #${issue.number}: ${issue.title}`,
+    `Work item #${item.id}: ${item.title}`,
     "",
     "Acceptance criteria:",
-    criteria.trim().length === 0 ? "(none beyond the issue text)" : criteria,
+    criteria.trim().length === 0 ? "(none beyond the item text)" : criteria,
     "",
     ...(repoFiles.trim().length === 0
       ? []
@@ -274,7 +276,7 @@ export const qaPrompt = (
     "Review: <one paragraph — your review summary of the implementation>;",
     "VERDICT: REJECT — followed by concrete, fixable findings (an engineer",
     "will address them in another iteration); or",
-    "VERDICT: CLARIFY — followed by the questions only the issue's author",
+    "VERDICT: CLARIFY — followed by the questions only the item's author",
     "can answer (use this instead of REJECT when the problem is ambiguous",
     "intent or scope, not a defect).",
     "No markdown decoration on the verdict line."
@@ -298,7 +300,7 @@ export const parseQa = (reply: string): QaVerdict | undefined => {
 }
 
 // Comments the humans wrote after Nightcall's last signed report — the
-// CEO's guidance for a stuck issue's next round.
+// CEO's guidance for a stuck work item's next round.
 export const guidanceSince = (
   comments: ReadonlyArray<{ readonly author: string; readonly body: string }>,
   reportSignature: string
@@ -377,18 +379,20 @@ export interface PrContext {
   readonly invoice: string
 }
 
-// The PR body must stand alone for a reviewer who has not read the issue
+// The PR body must stand alone for a reviewer who has not read the item
 // thread: what was asked, what was done, and how it was verified — built
 // deterministically from the plan, the git history, and the gate, so a
 // terse QA reply can never leave the PR empty.
-export const prBody = (issue: IssueSummary, context: PrContext): string => {
+export const prBody = (item: WorkItemSummary, context: PrContext): string => {
   const { feature, review } = splitQaSummary(context.qaSummary)
   return [
-    `Closes #${issue.number} — ${issue.title}.`,
+    // The board link is made by `--work-items` on the PR itself;
+    // this line is for a human reading the description.
+    `Work item #${item.id} — ${item.title}.`,
     "",
     "## What this delivers",
     feature.length === 0
-      ? issue.body.split(/\r?\n/).find((line) => line.trim().length > 0) ?? "(see the issue)"
+      ? item.body.split(/\r?\n/).find((line) => line.trim().length > 0) ?? "(see the item)"
       : feature,
     "",
     "## What changed",

@@ -12,11 +12,12 @@ the humans sleep.
 ## Quality bar
 
 - A change is done when CI is green, the diff is minimal, and a reviewer
-  who has never seen the issue can understand the PR description.
+  who has never seen the work item can understand the PR description.
 - Prefer extending an existing seam over adding a parallel one.
-- No drive-by refactors: implement what the issue asks, note anything
+- No drive-by refactors: implement what the work item asks, note anything
   else you found as a PR comment.
-- Never touch secrets, credentials, workflows under `.github/`, or
+- Never touch secrets, credentials, pipeline definitions (`azure-pipelines.yml`,
+  `.azuredevops/`), or
   release configuration unless the issue explicitly says so.
 
 ## Conventions

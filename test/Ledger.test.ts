@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect"
 import { LedgerEntry, appendLedger, readLedger, spentToday } from "../src/Ledger.ts"
 
 const entry = (at: string, costUsd: number): LedgerEntry =>
-  LedgerEntry.make({ at, target: "acme/widgets", issue: 1, outcome: "Shipped", costUsd })
+  LedgerEntry.make({ at, target: "acme/widgets", item: 1, outcome: "Shipped", costUsd })
 
 describe("Ledger", () => {
   it.effect("appends and reads back entries, skipping corrupt lines", () =>

@@ -8,7 +8,7 @@ import { makeCostTracker } from "@llm4ts/flow/CostTracker"
 import type { FlowContextShape } from "@llm4ts/flow/FlowContext"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import type { GitHubToolShape } from "@llm4ts/flow/GitHubTool"
+import type { HostingShape } from "./Hosting.ts"
 import { companyCoder } from "./Engineer.ts"
 import {
   makeFlowRunnerContext,
@@ -17,8 +17,9 @@ import {
 } from "@llm4ts/runner/FlowRunner"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
 import { timestampedSurface } from "./Surface.ts"
-import type { CompanyConfig } from "./Config.ts"
-import { repoRefOf, type ClaimIntent, type WorkerReport } from "./Heartbeat.ts"
+
+import type { ClaimIntent, WorkerReport } from "./Heartbeat.ts"
+import { projectRefOf, type CompanyConfig } from "./Config.ts"
 import {
   blockedByPrefix,
   epicChildMarker,
@@ -26,7 +27,7 @@ import {
   maxEpicChildren,
   parseEpicChildren
 } from "./Prompts.ts"
-import { Labels, signature, signed } from "./Protocol.ts"
+import { Tags, signature, signed } from "./Protocol.ts"
 
 // Epic decomposition: the Tech Lead turns one CEO epic into ordered child
 // issues. Issues-only — no worktree, no coder seat. The epic keeps
@@ -44,47 +45,47 @@ const totalCost = (cells: ReadonlyArray<CostCell>): number =>
   cells.reduce((sum, cell) => sum + (cell.costUsd ?? 0), 0)
 
 export const runEpic = (
-  gh: GitHubToolShape,
+  hosting: HostingShape,
   intent: ClaimIntent,
   config: CompanyConfig,
   environment: Readonly<Record<string, string | undefined>>,
   events: FlowEventsShape
 ): Effect.Effect<WorkerReport> =>
   Effect.gen(function* () {
-    const ref = intent.issue.ref(repoRefOf(intent.target))
-    const repo = repoRefOf(intent.target)
+    const ref = intent.item.ref(projectRefOf(intent.target))
+    const repo = projectRefOf(intent.target)
     const handbook = yield* readHandbook(process.cwd())
     // Iteration mode: the epic already shipped once (factory:validate) and
     // the CEO re-added ready — decompose from their feedback, not from the
     // original body alone.
-    const iterating = intent.issue.labels.includes(Labels.validate)
+    const iterating = intent.item.tags.includes(Tags.validate)
     const iteration = iterating
       ? yield* Effect.gen(function* () {
-          const comments = yield* gh.readIssueComments(ref).pipe(
+          const comments = yield* hosting.readComments(ref).pipe(
             Effect.orElseSucceed(() => [])
           )
           const feedback = comments
             .filter((comment) => !comment.body.includes(signature))
             .map((comment) => ({ author: comment.author, body: comment.body }))
-          const allIssues = yield* gh
-            .listIssues(repo, { state: "all" })
+          const allItems = yield* hosting
+            .listWorkItems(repo, { state: "all" })
             .pipe(Effect.orElseSucceed(() => []))
-          const marker = epicChildMarker(intent.issue.number)
-          const shipped = allIssues
-            .filter((issue) => issue.body.includes(marker))
-            .map((issue) => `#${issue.number} ${issue.title}`)
+          const marker = epicChildMarker(intent.item.id)
+          const shipped = allItems
+            .filter((item) => item.body.includes(marker))
+            .map((item) => `#${item.id} ${item.title}`)
           return { shipped, feedback }
         })
       : undefined
     const startedAtMs = yield* Clock.currentTimeMillis
-    const runId = `nightcall-epic-${intent.issue.number}-${startedAtMs}`
+    const runId = `nightcall-epic-${intent.item.id}-${startedAtMs}`
     const dependencies = nodeFlowRunnerDependencies()
     const coder = companyCoder(environment)
     const workDir = process.cwd()
     const options = {
       workDir,
       workspace: workDir,
-      userPrompt: epicDecompositionPrompt(intent.issue, handbook, iteration),
+      userPrompt: epicDecompositionPrompt(intent.item, handbook, iteration),
       coder: CliConnectorConfig.make({ ...coder, workingDir: workDir }),
       runId,
       surface: timestampedSurface(),
@@ -101,17 +102,17 @@ export const runEpic = (
           events: context.events,
           agent: "techlead"
         })
-        const reply = yield* techLead.ask(epicDecompositionPrompt(intent.issue, handbook, iteration))
+        const reply = yield* techLead.ask(epicDecompositionPrompt(intent.item, handbook, iteration))
         const children = parseEpicChildren(reply)
         if (children === undefined) {
-          yield* gh.writeIssueComment(
+          yield* hosting.writeComment(
             ref,
             signed(
               "The Tech Lead could not produce a parseable decomposition. " +
                 `Raw reply:\n\n${reply.slice(0, 1500)}`
             )
           )
-          yield* gh.editIssueLabels(ref, [Labels.needsInfo], [Labels.ready])
+          yield* hosting.editTags(ref, [Tags.needsInfo], [Tags.ready])
           yield* Ref.set(outcome, "Bounced")
           return
         }
@@ -121,7 +122,7 @@ export const runEpic = (
         const numberOfOrdinal: Array<number> = []
         for (const child of capped) {
           // DEPENDS ordinals refer to earlier children in this reply;
-          // creation order lets us resolve them to real issue numbers.
+          // creation order lets us resolve them to real work item ids.
           const blockers = child.dependsOn
             .map((ordinal) => numberOfOrdinal[ordinal - 1])
             .filter((value): value is number => value !== undefined)
@@ -129,27 +130,27 @@ export const runEpic = (
             blockers.length === 0
               ? ""
               : `\n${blockedByPrefix} ${blockers.map((n) => `#${n}`).join(", ")}`
-          const childRef = yield* gh.createIssue(
+          const childRef = yield* hosting.createWorkItem(
             repo,
             child.title,
-            `${child.body}${blockedLine}\n\n${epicChildMarker(intent.issue.number)}`,
-            [Labels.ready]
+            `${child.body}${blockedLine}\n\n${epicChildMarker(intent.item.id)}`,
+            [Tags.ready]
           )
-          numberOfOrdinal.push(childRef.number)
+          numberOfOrdinal.push(childRef.id)
           created.push(
-            `- #${childRef.number} ${child.title}${
+            `- #${childRef.id} ${child.title}${
               blockers.length === 0 ? "" : ` (blocked by ${blockers.map((n) => `#${n}`).join(", ")})`
             }`
           )
           yield* events.publish(
-            Info.make({ message: `epic #${intent.issue.number} → created #${childRef.number}` })
+            Info.make({ message: `epic #${intent.item.id} → created #${childRef.id}` })
           )
         }
-        yield* gh.writeIssueComment(
+        yield* hosting.writeComment(
           ref,
           signed(
             [
-              `Decomposed into ${created.length} child issue(s), in build order:`,
+              `Decomposed into ${created.length} child item(s), in build order:`,
               "",
               ...created,
               ...(children.length > capped.length
@@ -164,10 +165,10 @@ export const runEpic = (
         // queue — the transition is the last write, keeping retry safe.
         // An iteration also sheds validate; it returns when the new
         // children close.
-        yield* gh.editIssueLabels(
+        yield* hosting.editTags(
           ref,
           [],
-          iterating ? [Labels.ready, Labels.validate] : [Labels.ready]
+          iterating ? [Tags.ready, Tags.validate] : [Tags.ready]
         )
         yield* Ref.set(outcome, "Shipped")
       })
@@ -192,7 +193,7 @@ export const runEpic = (
     ).pipe(
       Effect.catch((error) =>
         Effect.ignore(
-          gh.writeIssueComment(
+          hosting.writeComment(
             ref,
             signed(`Epic decomposition failed: ${error.message}. Will retry next beat.`)
           )

@@ -5,19 +5,32 @@ import {
   makeFakeProcessExecutor,
   processCommandKey
 } from "@llm4ts/core/ProcessExecutor"
+import { makeFakeTemporaryFiles } from "@llm4ts/core/TemporaryFiles"
 import { makeCollectingFlowEvents } from "@llm4ts/flow/FlowEvents"
 import {
-  IssueSummary,
-  issueCommentArgs,
-  issueEditLabelsArgs,
-  issueListArgs,
-  makeGitHubTool
-} from "@llm4ts/flow/GitHubTool"
-import { CompanyConfig, TargetRepo } from "../src/Config.ts"
-import { claimComment, decide, heartbeat, repoRefOf } from "../src/Heartbeat.ts"
-import { Labels } from "../src/Protocol.ts"
+  commentsArgs,
+  makeAzureHosting,
+  queryArgs,
+  setTagsArgs,
+  toHtml,
+  wiqlFor,
+  workItemShowArgs,
+  type AzureConfig
+} from "../src/Azure.ts"
+import { CompanyConfig, TargetRepo, projectRefOf } from "../src/Config.ts"
+import { claimComment, decide, heartbeat } from "../src/Heartbeat.ts"
+import { WorkItemSummary } from "../src/Hosting.ts"
+import { Tags } from "../src/Protocol.ts"
 
-const target = TargetRepo.make({ owner: "acme", repo: "widgets" })
+const target = TargetRepo.make({ project: "acme", repository: "widgets" })
+const project = projectRefOf(target)
+
+const azure: AzureConfig = {
+  orgUrl: "https://dev.azure.com/acme",
+  workItemType: "Task",
+  targetBranch: "main",
+  apiVersion: "7.1-preview.3"
+}
 
 const config = CompanyConfig.make({
   targets: [target],
@@ -28,63 +41,115 @@ const config = CompanyConfig.make({
   engineerParallelism: 1
 })
 
-const empty = { planned: [], coded: [], reviewed: [], inReview: [], openNumbers: new Set<number>() }
+const empty = { planned: [], coded: [], reviewed: [], inReview: [], openIds: new Set<number>() }
 
-const summary = (number: number, labels: ReadonlyArray<string>): IssueSummary =>
-  IssueSummary.make({
-    number,
-    title: `Issue ${number}`,
+const summary = (id: number, tags: ReadonlyArray<string>): WorkItemSummary =>
+  WorkItemSummary.make({
+    id,
+    title: `Item ${id}`,
     body: "",
     author: "ceo",
-    labels,
+    tags,
+    state: "Active",
     updatedAt: "2026-07-31T00:00:00Z"
   })
+
+// One `az boards query` row, shaped the way the CLI flattens WIQL results.
+const row = (id: number, tag: string, body = "B"): string =>
+  JSON.stringify({
+    id,
+    fields: {
+      "System.Title": `T${id}`,
+      "System.Description": toHtml(body),
+      "System.State": "Active",
+      "System.Tags": tag,
+      "System.CreatedBy": { displayName: "ceo" },
+      "System.ChangedDate": "2026-07-31T00:00:00Z"
+    }
+  })
+
+const ok = ProcessResult.make({ stdout: [], exitCode: 0 })
+const json = (payload: string): ProcessResult =>
+  ProcessResult.make({ stdout: [payload], exitCode: 0 })
+
+const queryKey = (tags: ReadonlyArray<string>): string =>
+  processCommandKey(["az", ...queryArgs(azure, project, wiqlFor(project, { tags }))])
+
+const openQueryKey = processCommandKey([
+  "az",
+  ...queryArgs(azure, project, wiqlFor(project, { state: "open" }))
+])
+
+// The poll queries: one per checkpoint tag, plus the open-item sweep the
+// Blocked-by check needs.
+const pollResponses = (
+  rows: Readonly<Record<string, string>> = {}
+): ReadonlyArray<readonly [string, ProcessResult]> => [
+  ...[Tags.ready, Tags.wip, Tags.planned, Tags.coded, Tags.reviewed, Tags.review].map(
+    (tag) => [queryKey([tag]), json(rows[tag] ?? "[]")] as const
+  ),
+  [openQueryKey, json(rows["open"] ?? "[]")] as const
+]
+
+// A tag edit is read-merge-write over the single System.Tags field: show
+// the work item, then write the merged list back.
+const tagEditResponses = (
+  id: number,
+  current: ReadonlyArray<string>,
+  next: ReadonlyArray<string>
+): ReadonlyArray<readonly [string, ProcessResult]> => [
+  [processCommandKey(["az", ...workItemShowArgs(azure, id)]), json(row(id, current.join("; ")))],
+  [processCommandKey(["az", ...setTagsArgs(azure, id, next)]), ok]
+]
 
 describe("Heartbeat", () => {
   it("decide claims oldest first, caps by free seats, and reports epics", () => {
     const ready = [
-      summary(9, [Labels.ready]),
-      summary(3, [Labels.ready]),
-      summary(5, [Labels.ready, Labels.epic])
+      summary(9, [Tags.ready]),
+      summary(3, [Tags.ready]),
+      summary(5, [Tags.ready, Tags.epic])
     ]
     const idle = decide([{ target, ready, wip: [], ...empty }], config)
     assert.deepStrictEqual(
-      idle.claims.map((intent) => intent.issue.number),
+      idle.claims.map((intent) => intent.item.id),
       [3]
     )
     assert.deepStrictEqual(
-      idle.epics.map((intent) => intent.issue.number),
+      idle.epics.map((intent) => intent.item.id),
       [5]
     )
 
-    const busy = decide([{ target, ready, wip: [summary(1, [Labels.wip])], ...empty }], config)
+    const busy = decide([{ target, ready, wip: [summary(1, [Tags.wip])], ...empty }], config)
     assert.deepStrictEqual(busy.claims, [])
     assert.strictEqual(busy.inFlight, 1)
   })
 
   it("decide blocks plan and code claims until Blocked-by prerequisites close", () => {
-    const blockedIssue = IssueSummary.make({
-      number: 52,
+    const blocked = WorkItemSummary.make({
+      id: 52,
       title: "Apply shell design",
       body: "Work.\nBlocked-by: #51\n\nParent: #50 (epic)",
       author: "bot",
-      labels: [Labels.planned],
+      tags: [Tags.planned],
+      state: "Active",
       updatedAt: "2026-08-04T00:00:00Z"
     })
-    const withOpenBlocker = decide(
-      [{ target, ready: [], wip: [], planned: [blockedIssue], coded: [], reviewed: [], inReview: [], openNumbers: new Set([51]) }],
-      config
-    )
-    assert.deepStrictEqual(withOpenBlocker.stages.code, [])
-    const blockerClosed = decide(
-      [{ target, ready: [], wip: [], planned: [blockedIssue], coded: [], reviewed: [], inReview: [], openNumbers: new Set<number>() }],
-      config
-    )
-    assert.strictEqual(blockerClosed.stages.code.length, 1)
+    const snapshot = (openIds: ReadonlySet<number>) => ({
+      target,
+      ready: [],
+      wip: [],
+      planned: [blocked],
+      coded: [],
+      reviewed: [],
+      inReview: [],
+      openIds
+    })
+    assert.deepStrictEqual(decide([snapshot(new Set([51]))], config).stages.code, [])
+    assert.strictEqual(decide([snapshot(new Set<number>())], config).stages.code.length, 1)
   })
 
   it("decide stops claiming when today's spend exhausts the daily budget", () => {
-    const ready = [summary(3, [Labels.ready])]
+    const ready = [summary(3, [Tags.ready])]
     const throttled = decide([{ target, ready, wip: [], ...empty }], config, 25)
     assert.isTrue(throttled.throttled)
     assert.deepStrictEqual(throttled.claims, [])
@@ -94,123 +159,70 @@ describe("Heartbeat", () => {
     assert.strictEqual(underBudget.claims.length, 1)
   })
 
-  it("decide assigns one intent per stage from the checkpoint labels", () => {
+  it("decide assigns one intent per stage from the checkpoint tags", () => {
     const snapshots = [
       {
         target,
-        ready: [summary(30, [Labels.ready])],
+        ready: [summary(30, [Tags.ready])],
         wip: [],
-        planned: [summary(31, [Labels.planned]), summary(32, [Labels.planned])],
-        coded: [summary(33, [Labels.coded])],
-        reviewed: [summary(34, [Labels.reviewed])],
-        inReview: [summary(35, [Labels.review])],
-        openNumbers: new Set<number>()
+        planned: [summary(31, [Tags.planned]), summary(32, [Tags.planned])],
+        coded: [summary(33, [Tags.coded])],
+        reviewed: [summary(34, [Tags.reviewed])],
+        inReview: [summary(35, [Tags.review])],
+        openIds: new Set<number>()
       }
     ]
     const decision = decide(snapshots, config)
-    assert.deepStrictEqual(
-      decision.stages.plan.map((intent) => intent.issue.number),
-      [30]
-    )
-    // Code-stage cap is engineerParallelism (1): oldest planned issue only.
-    assert.deepStrictEqual(
-      decision.stages.code.map((intent) => intent.issue.number),
-      [31]
-    )
-    assert.deepStrictEqual(
-      decision.stages.review.map((intent) => intent.issue.number),
-      [33]
-    )
-    assert.deepStrictEqual(
-      decision.stages.qa.map((intent) => intent.issue.number),
-      [34]
-    )
-    assert.deepStrictEqual(
-      decision.stages.mend.map((intent) => intent.issue.number),
-      [35]
-    )
+    const ids = (stage: keyof typeof decision.stages): ReadonlyArray<number> =>
+      decision.stages[stage].map((intent) => intent.item.id)
+
+    assert.deepStrictEqual(ids("plan"), [30])
+    // Code-stage cap is engineerParallelism (1): oldest planned item only.
+    assert.deepStrictEqual(ids("code"), [31])
+    assert.deepStrictEqual(ids("review"), [33])
+    assert.deepStrictEqual(ids("qa"), [34])
+    assert.deepStrictEqual(ids("mend"), [35])
     const throttled = decide(snapshots, config, 25)
     assert.deepStrictEqual(throttled.stages.code, [])
     assert.deepStrictEqual(throttled.stages.qa, [])
   })
 
-  it.effect("staged mode runs each stage worker on its claimed issue", () =>
+  it.effect("staged mode runs each stage worker on its claimed work item", () =>
     Effect.gen(function* () {
-      const repo = repoRefOf(target)
-      const listJson = (issues: string): ProcessResult =>
-        ProcessResult.make({ stdout: [issues], exitCode: 0 })
-      const row = (number: number, label: string): string =>
-        `{"number":${number},"title":"T${number}","body":"B","author":{"login":"ceo"},` +
-        `"labels":[{"name":"${label}"}],"updatedAt":"2026-07-31T00:00:00Z"}`
-      const ok = ProcessResult.make({ stdout: [], exitCode: 0 })
       const fake = yield* makeFakeProcessExecutor({
         responses: new Map([
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.ready] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.wip] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.planned] })]),
-            listJson(`[${row(41, Labels.planned)}]`)
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.coded] })]),
-            listJson(`[${row(42, Labels.coded)}]`)
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.reviewed] })]),
-            listJson(`[${row(43, Labels.reviewed)}]`)
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.review] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { state: "open" })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey([
-              "gh",
-              ...issueEditLabelsArgs(summary(41, []).ref(repo), [Labels.wip], [])
-            ]),
-            ok
-          ],
-          [
-            processCommandKey([
-              "gh",
-              ...issueEditLabelsArgs(summary(42, []).ref(repo), [Labels.wip], [])
-            ]),
-            ok
-          ],
-          [
-            processCommandKey([
-              "gh",
-              ...issueEditLabelsArgs(summary(43, []).ref(repo), [Labels.wip], [])
-            ]),
-            ok
-          ]
+          ...pollResponses({
+            [Tags.planned]: `[${row(41, Tags.planned)}]`,
+            [Tags.coded]: `[${row(42, Tags.coded)}]`,
+            [Tags.reviewed]: `[${row(43, Tags.reviewed)}]`
+          }),
+          ...tagEditResponses(41, [Tags.planned], [Tags.planned, Tags.wip]),
+          ...tagEditResponses(42, [Tags.coded], [Tags.coded, Tags.wip]),
+          ...tagEditResponses(43, [Tags.reviewed], [Tags.reviewed, Tags.wip])
         ])
       })
+      const temp = yield* makeFakeTemporaryFiles()
       const events = yield* makeCollectingFlowEvents
-      const gh = makeGitHubTool(fake.executor, "/anywhere", events)
+      const hosting = makeAzureHosting(
+        azure,
+        fake.executor,
+        temp.temporaryFiles,
+        "/anywhere",
+        events
+      )
       const ran: Array<string> = []
       const stageWorker =
         (stage: string) =>
-        (intent: { issue: { number: number } }): Effect.Effect<{
+        (intent: { item: { id: number } }): Effect.Effect<{
           outcome: "Shipped" | "Bounced" | "Failed" | "Advanced"
           costUsd: number
         }> =>
           Effect.sync(() => {
-            ran.push(`${stage}:${intent.issue.number}`)
+            ran.push(`${stage}:${intent.item.id}`)
             return { outcome: "Advanced" as const, costUsd: 0.1 }
           })
 
-      yield* heartbeat(gh, config, events, {
+      yield* heartbeat(hosting, config, events, {
         claimMode: true,
         stageWorkers: {
           plan: stageWorker("plan"),
@@ -228,61 +240,32 @@ describe("Heartbeat", () => {
     })
   )
 
-  it.effect("claims via gh in claim mode and stays read-only in observe mode", () =>
+  it.effect("claims via az in claim mode and stays read-only in observe mode", () =>
     Effect.gen(function* () {
-      const repo = repoRefOf(target)
-      const listJson = (issues: string): ProcessResult =>
-        ProcessResult.make({ stdout: [issues], exitCode: 0 })
-      const readyRow =
-        '[{"number":3,"title":"T","body":"B","author":{"login":"ceo"},' +
-        `"labels":[{"name":"${Labels.ready}"}],"updatedAt":"2026-07-31T00:00:00Z"},` +
-        '{"number":5,"title":"E","body":"Epic body","author":{"login":"ceo"},' +
-        `"labels":[{"name":"${Labels.ready}"},{"name":"${Labels.epic}"}],` +
-        '"updatedAt":"2026-07-31T00:00:00Z"}]'
-      const ok = ProcessResult.make({ stdout: [], exitCode: 0 })
-      const issueRef = summary(3, [Labels.ready]).ref(repo)
+      const readyRows =
+        `[${row(3, Tags.ready)},${row(5, `${Tags.ready}; ${Tags.epic}`, "Epic body")}]`
       const fake = yield* makeFakeProcessExecutor({
         responses: new Map([
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.ready] })]),
-            listJson(readyRow)
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.wip] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.planned] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.coded] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.reviewed] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { labels: [Labels.review] })]),
-            listJson("[]")
-          ],
-          [
-            processCommandKey(["gh", ...issueListArgs(repo, { state: "open" })]),
-            listJson("[]")
-          ],
+          ...pollResponses({ [Tags.ready]: readyRows }),
+          ...tagEditResponses(3, [Tags.ready], [Tags.wip]),
           [
             processCommandKey([
-              "gh",
-              ...issueEditLabelsArgs(issueRef, [Labels.wip], [Labels.ready])
+              "az",
+              ...commentsArgs(azure, project.project, 3, "POST", undefined, "/fake/tmp")
             ]),
-            ok
-          ],
-          [processCommandKey(["gh", ...issueCommentArgs(issueRef, claimComment)]), ok]
+            json(JSON.stringify({ id: 900, text: toHtml(claimComment) }))
+          ]
         ])
       })
+      const temp = yield* makeFakeTemporaryFiles("/fake/tmp")
       const events = yield* makeCollectingFlowEvents
-      const gh = makeGitHubTool(fake.executor, "/anywhere", events)
+      const hosting = makeAzureHosting(
+        azure,
+        fake.executor,
+        temp.temporaryFiles,
+        "/anywhere",
+        events
+      )
 
       const worker = (): Effect.Effect<{
         outcome: "Shipped" | "Bounced" | "Failed"
@@ -291,30 +274,39 @@ describe("Heartbeat", () => {
 
       const epicReports: Array<number> = []
       const epicWorker = (intent: {
-        issue: { number: number }
+        item: { id: number }
       }): Effect.Effect<{ outcome: "Shipped" | "Bounced" | "Failed"; costUsd: number }> =>
         Effect.sync(() => {
-          epicReports.push(intent.issue.number)
+          epicReports.push(intent.item.id)
           return { outcome: "Shipped" as const, costUsd: 0.5 }
         })
 
-      const observed = yield* heartbeat(gh, config, events, { claimMode: false })
-      const readOnlyCalls = (yield* fake.recorded).length
-      const claimed = yield* heartbeat(gh, config, events, { claimMode: true, worker, epicWorker })
+      const observed = yield* heartbeat(hosting, config, events, { claimMode: false })
+      const readOnly = yield* fake.recorded
+      const claimed = yield* heartbeat(hosting, config, events, {
+        claimMode: true,
+        worker,
+        epicWorker
+      })
       const allCalls = yield* fake.recorded
       assert.deepStrictEqual(epicReports, [5])
 
       assert.strictEqual(observed.claims.length, 1)
-      assert.strictEqual(readOnlyCalls, 7)
+      // Observe mode is exactly the seven poll queries and nothing else: no
+      // tag write, no comment, nothing the CEO did not ask for.
+      assert.strictEqual(readOnly.length, 7)
+      assert.isTrue(readOnly.every((call) => call.argv.includes("query")))
       assert.strictEqual(claimed.claims.length, 1)
-      const issue = summary(3, [Labels.ready]).ref(repo)
-      const editKey = processCommandKey([
-        "gh",
-        ...issueEditLabelsArgs(issue, [Labels.wip], [Labels.ready])
-      ])
-      assert.isTrue(allCalls.map((call) => processCommandKey(call.argv)).includes(editKey))
-      const commentCall = allCalls.find((call) => call.argv.includes("comment"))
-      assert.include(commentCall?.argv.at(-1), "— Nightcall 🌙")
+      // The claim swapped ready for wip through a real System.Tags write.
+      const setKey = processCommandKey(["az", ...setTagsArgs(azure, 3, [Tags.wip])])
+      assert.isTrue(allCalls.map((call) => processCommandKey(call.argv)).includes(setKey))
+      // The comment body reaches az as a JSON file, never as an argument.
+      const commentCall = allCalls.find((call) => call.argv.includes("comments"))
+      assert.include(commentCall?.argv ?? [], "--in-file")
+      const written = yield* temp.files
+      assert.include(written.at(-1)?.contents ?? "", "Nightcall")
+      // No credential is ever forwarded to the CLI.
+      assert.isTrue(allCalls.every((call) => Object.keys(call.envVars).length === 0))
     })
   )
 })

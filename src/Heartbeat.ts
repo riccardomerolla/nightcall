@@ -3,40 +3,35 @@ import * as Effect from "effect/Effect"
 import * as Ref from "effect/Ref"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import {
-  IssueSummary,
-  RepoRef,
-  type GitHubToolShape,
-  type IssueRef
-} from "@llm4ts/flow/GitHubTool"
-import type { CompanyConfig, TargetRepo } from "./Config.ts"
+import type { HostingShape, WorkItemRef, WorkItemSummary } from "./Hosting.ts"
+import { projectRefOf, type CompanyConfig, type TargetRepo } from "./Config.ts"
 import { watchEpics } from "./EpicWatch.ts"
 import { blockedByRefs } from "./Prompts.ts"
 import { LedgerEntry, appendLedger, readLedger, spentToday } from "./Ledger.ts"
-import { Labels, claim, isEpic, phaseOf, signed, stageClaim } from "./Protocol.ts"
+import { Tags, claim, isEpic, phaseOf, signed, stageClaim } from "./Protocol.ts"
 
 // One heartbeat of the Chief of Staff: poll → decide → act. Polling and
-// acting go through GitHubTool; the decision in between is a pure function
-// so the claim policy is testable without any fake at all. The heartbeat
-// is idempotent — every action is derived fresh from GitHub label state
-// plus the durable ledger (for the daily spend throttle).
+// acting go through the hosting port; the decision in between is a pure
+// function, so the claim policy is testable without any fake at all. The
+// heartbeat is idempotent — every action is derived fresh from work item
+// tag state plus the durable ledger (for the daily spend throttle).
 
 export interface TargetSnapshot {
   readonly target: TargetRepo
-  readonly ready: ReadonlyArray<IssueSummary>
-  readonly wip: ReadonlyArray<IssueSummary>
-  readonly planned: ReadonlyArray<IssueSummary>
-  readonly coded: ReadonlyArray<IssueSummary>
-  readonly reviewed: ReadonlyArray<IssueSummary>
-  readonly inReview: ReadonlyArray<IssueSummary>
-  // Numbers of ALL open issues in the target — the blocked-by check needs
+  readonly ready: ReadonlyArray<WorkItemSummary>
+  readonly wip: ReadonlyArray<WorkItemSummary>
+  readonly planned: ReadonlyArray<WorkItemSummary>
+  readonly coded: ReadonlyArray<WorkItemSummary>
+  readonly reviewed: ReadonlyArray<WorkItemSummary>
+  readonly inReview: ReadonlyArray<WorkItemSummary>
+  // Ids of ALL open work items in the target — the blocked-by check needs
   // to know whether a prerequisite is still open.
-  readonly openNumbers: ReadonlySet<number>
+  readonly openIds: ReadonlySet<number>
 }
 
 export interface ClaimIntent {
   readonly target: TargetRepo
-  readonly issue: IssueSummary
+  readonly item: WorkItemSummary
 }
 
 export type Stage = "plan" | "code" | "review" | "qa" | "mend"
@@ -45,37 +40,34 @@ export interface HeartbeatDecision {
   readonly claims: ReadonlyArray<ClaimIntent>
   readonly epics: ReadonlyArray<ClaimIntent>
   // Staged pipeline: one intent list per stage, capped independently so
-  // four different issues can advance one stage each per beat.
+  // four different work items can advance one stage each per beat.
   readonly stages: Readonly<Record<Stage, ReadonlyArray<ClaimIntent>>>
   readonly inFlight: number
   readonly throttled: boolean
 }
 
-export const repoRefOf = (target: TargetRepo): RepoRef =>
-  RepoRef.make({ owner: target.owner, repo: target.repo })
-
 export const poll = (
-  gh: GitHubToolShape,
+  hosting: HostingShape,
   targets: ReadonlyArray<TargetRepo>
 ): Effect.Effect<ReadonlyArray<TargetSnapshot>, FlowError> =>
   Effect.forEach(targets, (target) =>
     Effect.gen(function* () {
-      const repo = repoRefOf(target)
-      const byLabel = (label: string): Effect.Effect<ReadonlyArray<IssueSummary>, FlowError> =>
-        gh.listIssues(repo, { labels: [label] })
-      const ready = yield* byLabel(Labels.ready)
-      const wip = yield* byLabel(Labels.wip)
-      const planned = yield* byLabel(Labels.planned)
-      const coded = yield* byLabel(Labels.coded)
-      const reviewed = yield* byLabel(Labels.reviewed)
-      const inReview = yield* byLabel(Labels.review)
-      const allOpen = yield* gh.listIssues(repo, { state: "open" })
-      // Queries are label-based; phaseOf re-checks precedence so an issue
+      const repo = projectRefOf(target)
+      const byTag = (tag: string): Effect.Effect<ReadonlyArray<WorkItemSummary>, FlowError> =>
+        hosting.listWorkItems(repo, { tags: [tag] })
+      const ready = yield* byTag(Tags.ready)
+      const wip = yield* byTag(Tags.wip)
+      const planned = yield* byTag(Tags.planned)
+      const coded = yield* byTag(Tags.coded)
+      const reviewed = yield* byTag(Tags.reviewed)
+      const inReview = yield* byTag(Tags.review)
+      const allOpen = yield* hosting.listWorkItems(repo, { state: "open" })
+      // Queries are tag-based; phaseOf re-checks precedence so a work item
       // carrying leftover markers is never claimed at two stages at once.
       const inPhase = (
-        issues: ReadonlyArray<IssueSummary>,
+        items: ReadonlyArray<WorkItemSummary>,
         phase: ReturnType<typeof phaseOf>
-      ): ReadonlyArray<IssueSummary> => issues.filter((issue) => phaseOf(issue.labels) === phase)
+      ): ReadonlyArray<WorkItemSummary> => items.filter((item) => phaseOf(item.tags) === phase)
       return {
         target,
         ready: inPhase(ready, "Ready"),
@@ -84,12 +76,12 @@ export const poll = (
         coded: inPhase(coded, "Coded"),
         reviewed: inPhase(reviewed, "Reviewed"),
         inReview: inPhase(inReview, "InReview"),
-        openNumbers: new Set(allOpen.map((issue) => issue.number))
+        openIds: new Set(allOpen.map((item) => item.id))
       }
     })
   )
 
-// Ready epics go to the Tech Lead for decomposition; plain ready issues
+// Ready epics go to the Tech Lead for decomposition; plain ready items
 // are claimed oldest-first, capped by free engineer seats across all
 // targets — unless today's ledger spend already exhausted the company's
 // daily budget, in which case nothing new starts. Epics are decomposed
@@ -104,15 +96,15 @@ export const decide = (
   let seats = throttled ? 0 : Math.max(0, config.engineerParallelism - inFlight)
   const claims: Array<ClaimIntent> = []
   const epics: Array<ClaimIntent> = []
-  const oldestFirst = (issues: ReadonlyArray<IssueSummary>): ReadonlyArray<IssueSummary> =>
-    [...issues].sort((a, b) => a.number - b.number)
+  const oldestFirst = (items: ReadonlyArray<WorkItemSummary>): ReadonlyArray<WorkItemSummary> =>
+    [...items].sort((a, b) => a.id - b.id)
   // Plan and code stages respect Blocked-by: a child waits until its
   // prerequisites are closed. Later stages operate on work already built,
   // so blocking them would only strand finished branches.
-  const blocked = (snapshot: TargetSnapshot, issue: IssueSummary): boolean =>
-    blockedByRefs(issue.body).some((number) => snapshot.openNumbers.has(number))
+  const blocked = (snapshot: TargetSnapshot, item: WorkItemSummary): boolean =>
+    blockedByRefs(item.body).some((number) => snapshot.openIds.has(number))
   const takeStage = (
-    pick: (snapshot: TargetSnapshot) => ReadonlyArray<IssueSummary>,
+    pick: (snapshot: TargetSnapshot) => ReadonlyArray<WorkItemSummary>,
     cap: number,
     respectBlocking = false
   ): ReadonlyArray<ClaimIntent> => {
@@ -121,22 +113,22 @@ export const decide = (
     }
     const intents: Array<ClaimIntent> = []
     for (const snapshot of snapshots) {
-      for (const issue of oldestFirst(pick(snapshot))) {
-        if (intents.length < cap && !(respectBlocking && blocked(snapshot, issue))) {
-          intents.push({ target: snapshot.target, issue })
+      for (const item of oldestFirst(pick(snapshot))) {
+        if (intents.length < cap && !(respectBlocking && blocked(snapshot, item))) {
+          intents.push({ target: snapshot.target, item })
         }
       }
     }
     return intents
   }
   for (const snapshot of snapshots) {
-    for (const issue of oldestFirst(snapshot.ready)) {
-      if (isEpic(issue.labels)) {
+    for (const item of oldestFirst(snapshot.ready)) {
+      if (isEpic(item.tags)) {
         if (!throttled) {
-          epics.push({ target: snapshot.target, issue })
+          epics.push({ target: snapshot.target, item })
         }
-      } else if (seats > 0 && !blocked(snapshot, issue)) {
-        claims.push({ target: snapshot.target, issue })
+      } else if (seats > 0 && !blocked(snapshot, item)) {
+        claims.push({ target: snapshot.target, item })
         seats -= 1
       }
     }
@@ -161,22 +153,22 @@ export const decide = (
 
 export const claimComment = signed(
   [
-    "Claimed. An engineer has been assigned to this issue;",
+    "Claimed. An engineer has been assigned to this item;",
     "progress and the invoice will be reported here."
   ].join(" ")
 )
 
-// The claim transition is the FIRST write for an issue (first-write-wins);
-// the comment follows so a crash between the two leaves a claimed issue
-// with no comment, not an unclaimed issue with a promise on it.
+// The claim transition is the FIRST write for an item (first-write-wins);
+// the comment follows so a crash between the two leaves a claimed item
+// with no comment, not an unclaimed item with a promise on it.
 export const executeClaim = (
-  gh: GitHubToolShape,
+  hosting: HostingShape,
   intent: ClaimIntent
 ): Effect.Effect<void, FlowError> =>
   Effect.gen(function* () {
-    const ref = intent.issue.ref(repoRefOf(intent.target))
-    yield* gh.editIssueLabels(ref, claim.add, claim.remove)
-    yield* gh.writeIssueComment(ref, claimComment)
+    const ref = intent.item.ref(projectRefOf(intent.target))
+    yield* hosting.editTags(ref, claim.add, claim.remove)
+    yield* hosting.writeComment(ref, claimComment)
   })
 
 export interface WorkerReport {
@@ -185,24 +177,24 @@ export interface WorkerReport {
 }
 
 export interface HeartbeatOptions {
-  // Observe mode (false) logs claim intents without writing to GitHub —
+  // Observe mode (false) logs claim intents without writing to the board —
   // the safety default, so the factory never claims work it cannot do.
   readonly claimMode: boolean
-  // Works one claimed issue to completion; wired to Engineer.runIssue by
+  // Works one claimed item to completion; wired to Engineer.runWorkItem by
   // the daemon, injectable for tests. Must never fail.
   readonly worker?: (intent: ClaimIntent) => Effect.Effect<WorkerReport>
-  // Decomposes one ready epic into child issues; wired to
+  // Decomposes one ready epic into child work items; wired to
   // TechLead.runEpic. Epics are observed-only when unset.
   readonly epicWorker?: (intent: ClaimIntent) => Effect.Effect<WorkerReport>
   // Staged pipeline: one worker per stage. When set (and claimMode is on),
-  // stage intents run CONCURRENTLY — up to four different issues advance
+  // stage intents run CONCURRENTLY — up to four different items advance
   // one stage each per beat — and the monolithic `worker` is not used.
   readonly stageWorkers?: Readonly<Record<Stage, (intent: ClaimIntent) => Effect.Effect<WorkerReport>>>
   // Where the ledger lives; no ledger (and no spend throttle) when unset.
   readonly workspaceDir?: string
-  // Optional standup issue: a heartbeat with activity posts a summary
+  // Optional standup work item: a heartbeat with activity posts a summary
   // comment there so the CEO can watch the company from one thread.
-  readonly standupIssue?: IssueRef
+  readonly standupItem?: WorkItemRef
 }
 
 export const standupSummary = (
@@ -218,7 +210,7 @@ export const standupSummary = (
     `- Claimed this beat: ${worked.length}`,
     ...worked.map(
       ({ intent, report }) =>
-        `  - ${intent.target.slug}#${intent.issue.number}: ${report.outcome} ` +
+        `  - ${intent.target.slug}#${intent.item.id}: ${report.outcome} ` +
         `($${report.costUsd.toFixed(4)})`
     ),
     `- Epics decomposed this beat: ${decision.epics.length}`,
@@ -227,7 +219,7 @@ export const standupSummary = (
   ].join("\n")
 
 export const heartbeat = (
-  gh: GitHubToolShape,
+  hosting: HostingShape,
   config: CompanyConfig,
   events: FlowEventsShape,
   options: HeartbeatOptions
@@ -241,7 +233,7 @@ export const heartbeat = (
       options.workspaceDir === undefined ? [] : yield* readLedger(options.workspaceDir)
     let spent = spentToday(ledger, nowIso)
 
-    const snapshots = yield* poll(gh, config.targets)
+    const snapshots = yield* poll(hosting, config.targets)
     const decision = decide(snapshots, config, spent)
 
     yield* say(
@@ -251,15 +243,15 @@ export const heartbeat = (
     )
 
     if (options.claimMode) {
-      yield* Effect.ignore(watchEpics(gh, config.targets, events))
+      yield* Effect.ignore(watchEpics(hosting, config.targets, events))
     }
 
     const worked: Array<{ intent: ClaimIntent; report: WorkerReport }> = []
     for (const epic of decision.epics) {
       if (!options.claimMode || options.epicWorker === undefined) {
         yield* say(
-          `observe mode: would decompose epic ${epic.target.slug}#${epic.issue.number}: ` +
-            epic.issue.title
+          `observe mode: would decompose epic ${epic.target.slug}#${epic.item.id}: ` +
+            epic.item.title
         )
         continue
       }
@@ -267,7 +259,7 @@ export const heartbeat = (
       worked.push({ intent: epic, report })
       spent += report.costUsd
       yield* say(
-        `epic ${epic.target.slug}#${epic.issue.number} → ${report.outcome} ` +
+        `epic ${epic.target.slug}#${epic.item.id} → ${report.outcome} ` +
           `($${report.costUsd.toFixed(4)}, $${spent.toFixed(2)} today)`
       )
       if (options.workspaceDir !== undefined) {
@@ -276,7 +268,7 @@ export const heartbeat = (
           LedgerEntry.make({
             at: nowIso,
             target: epic.target.slug,
-            issue: epic.issue.number,
+            item: epic.item.id,
             outcome: report.outcome,
             costUsd: report.costUsd
           })
@@ -284,7 +276,7 @@ export const heartbeat = (
       }
     }
     // Staged pipeline: claim and run every stage intent concurrently. Each
-    // intent is a different issue (an issue sits at exactly one phase), so
+    // intent is a different item (an item sits at exactly one phase), so
     // the only shared resource is the target clone, which the workers
     // serialize internally.
     if (options.claimMode && options.stageWorkers !== undefined) {
@@ -297,25 +289,25 @@ export const heartbeat = (
       // then FORK each worker: the beat returns in seconds, so cheap
       // stages (mend's merge checks, new claims, epic-watch) tick every
       // heartbeat instead of waiting behind multi-minute coder runs. The
-      // wip label prevents double-claims across beats; boot reconciliation
+      // wip tag prevents double-claims across beats; boot reconciliation
       // recovers fibers lost to a restart. Outcomes are logged and
       // ledgered by each fiber as it finishes.
       yield* Effect.forEach(stagePairs, ({ stage, intent }) =>
         Effect.gen(function* () {
           if (stage === "plan") {
-            yield* executeClaim(gh, intent)
+            yield* executeClaim(hosting, intent)
           } else {
             yield* Effect.ignore(
-              gh.editIssueLabels(intent.issue.ref(repoRefOf(intent.target)), stageClaim.add, [])
+              hosting.editTags(intent.item.ref(projectRefOf(intent.target)), stageClaim.add, [])
             )
           }
-          yield* say(`${stage}: claimed ${intent.target.slug}#${intent.issue.number}`)
+          yield* say(`${stage}: claimed ${intent.target.slug}#${intent.item.id}`)
           yield* Effect.forkDetach(
             Effect.gen(function* () {
               const report = yield* stageWorkers[stage](intent)
               const total = yield* Ref.updateAndGet(spentRef, (value) => value + report.costUsd)
               yield* say(
-                `${stage}: ${intent.target.slug}#${intent.issue.number} → ${report.outcome} ` +
+                `${stage}: ${intent.target.slug}#${intent.item.id} → ${report.outcome} ` +
                   `($${report.costUsd.toFixed(4)}, $${total.toFixed(2)} today)`
               )
               if (options.workspaceDir !== undefined) {
@@ -324,7 +316,7 @@ export const heartbeat = (
                   LedgerEntry.make({
                     at: nowIso,
                     target: intent.target.slug,
-                    issue: intent.issue.number,
+                    item: intent.item.id,
                     outcome: report.outcome,
                     costUsd: report.costUsd
                   })
@@ -338,22 +330,22 @@ export const heartbeat = (
     }
 
     for (const intent of decision.claims) {
-      // Claiming without a worker would strand the issue in factory:wip,
+      // Claiming without a worker would strand the item in factory:wip,
       // so a missing worker falls back to observe behavior.
       if (!options.claimMode || options.worker === undefined) {
         yield* say(
-          `observe mode: would claim ${intent.target.slug}#${intent.issue.number}: ` +
-            intent.issue.title
+          `observe mode: would claim ${intent.target.slug}#${intent.item.id}: ` +
+            intent.item.title
         )
         continue
       }
-      yield* executeClaim(gh, intent)
-      yield* say(`claimed ${intent.target.slug}#${intent.issue.number}: ${intent.issue.title}`)
+      yield* executeClaim(hosting, intent)
+      yield* say(`claimed ${intent.target.slug}#${intent.item.id}: ${intent.item.title}`)
       const report = yield* options.worker(intent)
       worked.push({ intent, report })
       spent += report.costUsd
       yield* say(
-        `${intent.target.slug}#${intent.issue.number} → ${report.outcome} ` +
+        `${intent.target.slug}#${intent.item.id} → ${report.outcome} ` +
           `($${report.costUsd.toFixed(4)}, $${spent.toFixed(2)} today)`
       )
       if (options.workspaceDir !== undefined) {
@@ -362,7 +354,7 @@ export const heartbeat = (
           LedgerEntry.make({
             at: nowIso,
             target: intent.target.slug,
-            issue: intent.issue.number,
+            item: intent.item.id,
             outcome: report.outcome,
             costUsd: report.costUsd
           })
@@ -374,10 +366,10 @@ export const heartbeat = (
       }
     }
 
-    if (options.standupIssue !== undefined && (worked.length > 0 || decision.throttled)) {
+    if (options.standupItem !== undefined && (worked.length > 0 || decision.throttled)) {
       yield* Effect.ignore(
-        gh.writeIssueComment(
-          options.standupIssue,
+        hosting.writeComment(
+          options.standupItem,
           signed(standupSummary(decision, worked, spent, config.dailyBudgetUsd))
         )
       )

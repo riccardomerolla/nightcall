@@ -3,7 +3,7 @@ import { dirname, join } from "node:path"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
-// The durable ledger: one JSONL line per worked issue, appended under the
+// The durable ledger: one JSONL line per worked item, appended under the
 // workspace. DESIGN.md's orphan-branch publication is deferred until the
 // trust bar (see DESIGN.md status); the record format is stable so the
 // file can be replayed onto a branch later. Deterministic code only.
@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema"
 export class LedgerEntry extends Schema.Class<LedgerEntry>("LedgerEntry")({
   at: Schema.String,
   target: Schema.String,
-  issue: Schema.Int,
+  item: Schema.Int,
   outcome: Schema.Literals(["Shipped", "Bounced", "Failed", "Advanced", "Iterated"]),
   costUsd: Schema.Number
 }) {}

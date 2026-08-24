@@ -2,9 +2,9 @@ import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
 import * as Ref from "effect/Ref"
 import type { FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import type { GitHubToolShape, IssueRef } from "@llm4ts/flow/GitHubTool"
+import type { HostingShape, WorkItemRef } from "./Hosting.ts"
 
-// Live progress on the issue itself: every per-task stage the flow starts
+// Live progress on the work item itself: every per-task stage the flow
 // or finishes becomes a comment —
 //   ▶ Implement kebabCase in src/strcase.js
 //   ✔ Implement kebabCase in src/strcase.js (3m06s)
@@ -23,12 +23,12 @@ const internalStages = new Set(["branch"])
 
 export const makeProgressEvents = (
   inner: FlowEventsShape,
-  gh: GitHubToolShape,
-  ref: IssueRef
+  hosting: HostingShape,
+  ref: WorkItemRef
 ): Effect.Effect<FlowEventsShape> =>
   Effect.map(Ref.make(new Map<string, number>()), (started) => {
     const tell = (body: string): Effect.Effect<void> =>
-      Effect.ignore(gh.writeIssueComment(ref, body))
+      Effect.ignore(hosting.writeComment(ref, body))
     const elapsed = (stage: string): Effect.Effect<string> =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis

@@ -2,7 +2,7 @@
   "name": "nightcall",
   "version": "0.1.0",
   "private": true,
-  "description": "A dark software house: a virtual AI company on llm4ts with GitHub as its control plane",
+  "description": "A dark software house: a virtual AI company on llm4ts with Azure DevOps as its control plane and the Gemini CLI as its coder",
   "type": "module",
   "engines": {
     "node": ">=22"

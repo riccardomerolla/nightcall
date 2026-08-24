@@ -2,31 +2,17 @@ import { assert, describe, it } from "@effect/vitest"
 import * as Effect from "effect/Effect"
 import * as Ref from "effect/Ref"
 import { makeCollectingFlowEvents, StageCompleted, StageFailed, StageStarted } from "@llm4ts/flow/FlowEvents"
-import { IssueRef, type GitHubToolShape } from "@llm4ts/flow/GitHubTool"
+import { WorkItemRef } from "../src/Hosting.ts"
+import { stubHosting } from "./FakeHosting.ts"
 import { formatDuration, makeProgressEvents } from "../src/Progress.ts"
 
-const ref = IssueRef.make({ owner: "acme", repo: "widgets", number: 7 })
+const ref = WorkItemRef.make({ project: "acme", repository: "widgets", id: 7 })
 
-const commentCollector = (
-  comments: Ref.Ref<ReadonlyArray<string>>
-): GitHubToolShape => ({
-  createPr: () => Effect.die("unused"),
-  readIssue: () => Effect.die("unused"),
-  readIssueComments: () => Effect.die("unused"),
-  writeIssueComment: (_ref, body) =>
-    Ref.update(comments, (existing) => [...existing, body]).pipe(Effect.as(undefined)),
-  editIssueComment: () => Effect.die("unused"),
-  writePrComment: () => Effect.die("unused"),
-  updatePr: () => Effect.die("unused"),
-  prChecks: () => Effect.die("unused"),
-  viewOpenPr: Effect.die("unused"),
-  mergePr: () => Effect.die("unused"),
-  listIssues: () => Effect.die("unused"),
-  createIssue: () => Effect.die("unused"),
-  editIssueLabels: () => Effect.die("unused"),
-  assignIssue: () => Effect.die("unused"),
-  closeIssue: () => Effect.die("unused")
-})
+const commentCollector = (comments: Ref.Ref<ReadonlyArray<string>>) =>
+  stubHosting({
+    writeComment: (_ref, body) =>
+      Ref.update(comments, (existing) => [...existing, body]).pipe(Effect.as(undefined))
+  })
 
 describe("Progress", () => {
   it("formats durations", () => {

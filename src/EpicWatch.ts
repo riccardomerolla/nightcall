@@ -1,11 +1,10 @@
 import * as Effect from "effect/Effect"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import type { GitHubToolShape, IssueSummary } from "@llm4ts/flow/GitHubTool"
-import type { TargetRepo } from "./Config.ts"
-import { repoRefOf } from "./Heartbeat.ts"
+import type { HostingShape, WorkItemSummary } from "./Hosting.ts"
+import { projectRefOf, type TargetRepo } from "./Config.ts"
 import { epicChildMarker } from "./Prompts.ts"
-import { Labels, signed } from "./Protocol.ts"
+import { Tags, signed } from "./Protocol.ts"
 
 // The epic validation loop's deterministic half. When every child of a
 // decomposed epic is closed, the epic is tagged factory:validate and the
@@ -21,48 +20,48 @@ export interface EpicChildrenStatus {
 
 export const epicChildrenStatus = (
   epicNumber: number,
-  openIssues: ReadonlyArray<IssueSummary>,
-  allIssues: ReadonlyArray<IssueSummary>
+  openItems: ReadonlyArray<WorkItemSummary>,
+  allItems: ReadonlyArray<WorkItemSummary>
 ): EpicChildrenStatus => {
   const marker = epicChildMarker(epicNumber)
-  const children = allIssues.filter((issue) => issue.body.includes(marker))
-  const stillOpen = openIssues.filter((issue) => issue.body.includes(marker))
+  const children = allItems.filter((item) => item.body.includes(marker))
+  const stillOpen = openItems.filter((item) => item.body.includes(marker))
   return {
     complete: children.length > 0 && stillOpen.length === 0,
-    shipped: children.map((issue) => `#${issue.number} ${issue.title}`)
+    shipped: children.map((item) => `#${item.id} ${item.title}`)
   }
 }
 
 export const watchEpics = (
-  gh: GitHubToolShape,
+  hosting: HostingShape,
   targets: ReadonlyArray<TargetRepo>,
   events: FlowEventsShape
 ): Effect.Effect<void, FlowError> =>
   Effect.forEach(targets, (target) =>
     Effect.gen(function* () {
-      const repo = repoRefOf(target)
-      const epics = yield* gh.listIssues(repo, { labels: [Labels.epic], state: "open" })
+      const repo = projectRefOf(target)
+      const epics = yield* hosting.listWorkItems(repo, { tags: [Tags.epic], state: "open" })
       const candidates = epics.filter(
         (epic) =>
-          !epic.labels.includes(Labels.ready) &&
-          !epic.labels.includes(Labels.validate) &&
-          !epic.labels.includes(Labels.needsInfo)
+          !epic.tags.includes(Tags.ready) &&
+          !epic.tags.includes(Tags.validate) &&
+          !epic.tags.includes(Tags.needsInfo)
       )
       if (candidates.length === 0) {
         return
       }
-      const openIssues = yield* gh.listIssues(repo, { state: "open" })
-      const allIssues = yield* gh.listIssues(repo, { state: "all" })
+      const openItems = yield* hosting.listWorkItems(repo, { state: "open" })
+      const allItems = yield* hosting.listWorkItems(repo, { state: "all" })
       yield* Effect.forEach(candidates, (epic) =>
         Effect.gen(function* () {
-          const status = epicChildrenStatus(epic.number, openIssues, allIssues)
+          const status = epicChildrenStatus(epic.id, openItems, allItems)
           if (!status.complete) {
             return
           }
           const ref = epic.ref(repo)
-          yield* gh.editIssueLabels(ref, [Labels.validate], [])
+          yield* hosting.editTags(ref, [Tags.validate], [])
           yield* Effect.ignore(
-            gh.writeIssueComment(
+            hosting.writeComment(
               ref,
               signed(
                 [
@@ -81,7 +80,7 @@ export const watchEpics = (
           )
           yield* events.publish(
             Info.make({
-              message: `epic ${target.slug}#${epic.number} complete — tagged for CEO validation`
+              message: `epic ${target.slug}#${epic.id} complete — tagged for CEO validation`
             })
           )
         })

@@ -12,7 +12,6 @@ import { implementPlanFlow } from "@llm4ts/flow/Flow"
 import type { FlowContextShape } from "@llm4ts/flow/FlowContext"
 import { ProcessError, type FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import { makeGitHubTool, type GitHubToolShape, type IssueRef } from "@llm4ts/flow/GitHubTool"
 import { makePlanStore } from "@llm4ts/flow/Persistence"
 import { Plan } from "@llm4ts/flow/Plan"
 import { planFrom } from "@llm4ts/flow/Planner"
@@ -27,8 +26,10 @@ import { nodePlainFileStore } from "@llm4ts/runner/NodePlainFileStore"
 import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
 import { timestampedSurface } from "./Surface.ts"
-import type { CompanyConfig } from "./Config.ts"
-import { repoRefOf, type ClaimIntent } from "./Heartbeat.ts"
+import { cloneUrl, type AzureConfig } from "./Azure.ts"
+import type { HostingShape, WorkItemRef } from "./Hosting.ts"
+import { projectRefOf, type CompanyConfig } from "./Config.ts"
+import type { ClaimIntent } from "./Heartbeat.ts"
 import { makeProgressEvents } from "./Progress.ts"
 import {
   engineerBrief,
@@ -42,8 +43,8 @@ import {
   triagePrompt
 } from "./Prompts.ts"
 import {
-  Labels,
-  attemptLabel,
+  Tags,
+  attemptTag,
   attemptOf,
   bounce,
   branchFor,
@@ -54,13 +55,13 @@ import {
   signed
 } from "./Protocol.ts"
 
-// One claimed issue, end to end: Tech Lead triage → Engineer
+// One claimed work item, end to end: Tech Lead triage → Engineer
 // (implementPlanFlow in a worktree) → QA over the final diff → push, PR,
 // factory:review — or the bounce/failure paths. Never fails the daemon:
-// every outcome, including errors, resolves to an IssueOutcome and is
-// reported on the issue itself.
+// every outcome, including errors, resolves to an WorkOutcome and is
+// reported on the work item itself.
 
-export type IssueOutcome = "Shipped" | "Bounced" | "Failed"
+export type WorkOutcome = "Shipped" | "Bounced" | "Failed"
 
 export const run = (
   argv: ReadonlyArray<string>,
@@ -105,13 +106,24 @@ export const pruneNonCodingTasks = (plan: Plan): Plan => {
       })
 }
 
-// The company's coder casting in one place: connector from LLM4TS_CODER
-// (default claude), model override from NIGHTCALL_CODER_MODEL (e.g.
-// claude-sonnet-5, or CLI aliases like sonnet/opus).
+// The company's coder casting in one place. Every seat on this branch is
+// the Gemini CLI: llm4ts's coderFromEnv defaults to claude, so the default
+// is overridden here rather than left to the operator's environment — a
+// company whose coder silently changes with an unset variable is not a
+// company. LLM4TS_CODER still wins when the operator sets it explicitly,
+// and NIGHTCALL_CODER_MODEL overrides the model (e.g. gemini-2.5-pro).
+export const defaultCoder = "gemini"
+
 export const companyCoder = (
   environment: Readonly<Record<string, string | undefined>>
 ): CliConnectorConfig => {
-  const base = coderFromEnv(environment)
+  const base = coderFromEnv({
+    ...environment,
+    LLM4TS_CODER:
+      environment["LLM4TS_CODER"]?.trim() ||
+      environment["LLM4ZIO_CODER"]?.trim() ||
+      defaultCoder
+  })
   const model = environment["NIGHTCALL_CODER_MODEL"]?.trim()
   return model === undefined || model.length === 0
     ? base
@@ -129,14 +141,14 @@ const exists = (path: string): Effect.Effect<boolean> =>
     Effect.catch(() => Effect.succeed(false))
   )
 
-export const issuePaths = (
+export const workItemPaths = (
   workspaceDir: string,
   intent: ClaimIntent
 ): { readonly repoDir: string; readonly worktree: string } => {
-  const slugDir = `${intent.target.owner}__${intent.target.repo}`
+  const slugDir = `${intent.target.project}__${intent.target.repository}`
   return {
     repoDir: join(workspaceDir, "repos", slugDir),
-    worktree: join(workspaceDir, "worktrees", slugDir, `issue-${intent.issue.number}`)
+    worktree: join(workspaceDir, "worktrees", slugDir, `item-${intent.item.id}`)
   }
 }
 
@@ -144,14 +156,14 @@ export const issuePaths = (
 // from a brand-new branch off origin/HEAD: worktree, persisted plan, and
 // the branch locally and on the remote. All best-effort: a partially
 // applied reset still proceeds (worktree add -B re-points the branch).
-export const resetIssueState = (
+export const resetWorkItemState = (
   workspaceDir: string,
   intent: ClaimIntent,
   planPath: string
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const { repoDir, worktree } = issuePaths(workspaceDir, intent)
-    const branch = branchFor(intent.issue.number)
+    const { repoDir, worktree } = workItemPaths(workspaceDir, intent)
+    const branch = branchFor(intent.item.id)
     yield* Effect.ignore(
       Effect.tryPromise({
         try: () => rm(worktree, { recursive: true, force: true }),
@@ -168,23 +180,31 @@ export const resetIssueState = (
     )
   })
 
-// Clone-on-first-use per target, then a worktree per issue. An existing
-// worktree is reused as-is: the persisted plan inside it makes a re-run
-// resume instead of restart (DESIGN.md reconciliation).
+// Clone-on-first-use per target, then a worktree per work item. An
+// existing worktree is reused as-is: the persisted plan inside it makes a
+// re-run resume instead of restart (DESIGN.md reconciliation).
+//
+// Azure DevOps has no `az repos clone`, so the remote is the plain HTTPS
+// git URL and git's own credential helper authenticates it. That is
+// deliberate: putting a PAT in the URL would write a secret into argv and
+// into .git/config on disk.
 export const ensureWorktree = (
   workspaceDir: string,
+  azure: AzureConfig,
   intent: ClaimIntent,
   lock?: Semaphore.Semaphore
 ): Effect.Effect<string, FlowError> => {
   const setup = Effect.gen(function* () {
-    const { repoDir, worktree } = issuePaths(workspaceDir, intent)
+    const { repoDir, worktree } = workItemPaths(workspaceDir, intent)
     yield* Effect.tryPromise({
       try: () => mkdir(join(workspaceDir, "repos"), { recursive: true }),
-      catch: (error) =>
-        ProcessError.make({ message: "mkdir", detail: String(error) })
+      catch: (error) => ProcessError.make({ message: "mkdir", detail: String(error) })
     })
     if (!(yield* exists(repoDir))) {
-      yield* run(["gh", "repo", "clone", intent.target.slug, repoDir], workspaceDir)
+      yield* run(
+        ["git", "clone", cloneUrl(azure, projectRefOf(intent.target)), repoDir],
+        workspaceDir
+      )
     }
     yield* run(["git", "-C", repoDir, "fetch", "origin", "--prune"], workspaceDir)
     if (!(yield* exists(worktree))) {
@@ -199,7 +219,7 @@ export const ensureWorktree = (
           "worktree",
           "add",
           "-B",
-          branchFor(intent.issue.number),
+          branchFor(intent.item.id),
           worktree,
           "origin/HEAD"
         ],
@@ -220,7 +240,7 @@ export const readHandbook = (cwd: string): Effect.Effect<string> =>
   }).pipe(Effect.catch(() => Effect.succeed("")))
 
 export interface EngineerReport {
-  readonly outcome: IssueOutcome
+  readonly outcome: WorkOutcome
   readonly costUsd: number
 }
 
@@ -228,22 +248,23 @@ export const totalCost = (cells: ReadonlyArray<CostCell>): number =>
   cells.reduce((sum, cell) => sum + (cell.costUsd ?? 0), 0)
 
 // Post-run bookkeeping helpers are best-effort: a failed comment must not
-// turn a shipped issue into a crashed daemon.
+// turn a shipped work item into a crashed daemon.
 export const tell = (
-  gh: GitHubToolShape,
-  ref: IssueRef,
+  hosting: HostingShape,
+  ref: WorkItemRef,
   body: string
-): Effect.Effect<void> => Effect.ignore(gh.writeIssueComment(ref, signed(body)))
+): Effect.Effect<void> => Effect.ignore(hosting.writeComment(ref, signed(body)))
 
-export const runIssue = (
-  gh: GitHubToolShape,
+export const runWorkItem = (
+  hosting: HostingShape,
+  azure: AzureConfig,
   intent: ClaimIntent,
   config: CompanyConfig,
   environment: Readonly<Record<string, string | undefined>>,
   events: FlowEventsShape
 ): Effect.Effect<EngineerReport> =>
   Effect.gen(function* () {
-    const ref = intent.issue.ref(repoRefOf(intent.target))
+    const ref = intent.item.ref(projectRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
     // Plans and traces live OUTSIDE the worktree: commitAll sweeps the
     // whole tree, and run-state (prompts, tool output) must never land in
@@ -252,31 +273,31 @@ export const runIssue = (
     const stateDir = join(
       workspaceDir,
       "state",
-      `${intent.target.owner}__${intent.target.repo}`
+      `${intent.target.project}__${intent.target.repository}`
     )
     yield* Effect.tryPromise({
       try: () => mkdir(stateDir, { recursive: true }),
       catch: (error) => ProcessError.make({ message: "mkdir state", detail: String(error) })
     })
-    const planPath = join(stateDir, `issue-${intent.issue.number}-plan.md`)
+    const planPath = join(stateDir, `item-${intent.item.id}-plan.md`)
 
-    if (isFresh(intent.issue.labels)) {
-      yield* resetIssueState(workspaceDir, intent, planPath)
-      yield* Effect.ignore(gh.editIssueLabels(ref, [], [Labels.fresh]))
-      yield* tell(gh, ref, "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded.")
+    if (isFresh(intent.item.tags)) {
+      yield* resetWorkItemState(workspaceDir, intent, planPath)
+      yield* Effect.ignore(hosting.editTags(ref, [], [Tags.fresh]))
+      yield* tell(hosting, ref, "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded.")
     }
 
-    const worktree = yield* ensureWorktree(workspaceDir, intent)
+    const worktree = yield* ensureWorktree(workspaceDir, azure, intent)
     const handbook = yield* readHandbook(process.cwd())
-    const budgetUsd = budgetOverrideUsd(intent.issue.labels) ?? config.issueBudgetUsd
-    const branch = branchFor(intent.issue.number)
+    const budgetUsd = budgetOverrideUsd(intent.item.tags) ?? config.issueBudgetUsd
+    const branch = branchFor(intent.item.id)
     const gate = environment["NIGHTCALL_GATE"]?.trim()
 
     const startedAtMs = yield* Clock.currentTimeMillis
-    const runId = `nightcall-${intent.issue.number}-${startedAtMs}`
+    const runId = `nightcall-${intent.item.id}-${startedAtMs}`
     const store = makePlanStore(nodePlainFileStore)
     const dependencies = nodeFlowRunnerDependencies()
-    // Bounded darkness: a per-task turn limit and a per-issue wall clock.
+    // Bounded darkness: a per-task turn limit and a per-item wall clock.
     // Trust-bar run 3 spent 84 minutes and 90k tokens on one importer task
     // before the CLI died — without bounds, one degenerate task holds the
     // company's only seat for hours.
@@ -291,7 +312,7 @@ export const runIssue = (
     const options = {
       workDir: worktree,
       workspace: worktree,
-      userPrompt: engineerBrief(intent.issue, "", handbook),
+      userPrompt: engineerBrief(intent.item, "", handbook),
       coder: CliConnectorConfig.make({ ...coder, workingDir: worktree }),
       tracePath: join(stateDir, `trace-${runId}.jsonl`),
       runId,
@@ -300,7 +321,7 @@ export const runIssue = (
       budget: CostBudget.make({ maximumCostUsd: budgetUsd })
     }
 
-    const outcome = yield* Ref.make<IssueOutcome>("Failed")
+    const outcome = yield* Ref.make<WorkOutcome>("Failed")
     const qaSummary = yield* Ref.make("")
     const cellsRef = yield* Ref.make<ReadonlyArray<CostCell>>([])
 
@@ -311,7 +332,7 @@ export const runIssue = (
         // self-second-guessing (trust-bar run: the triager bounced a
         // child its decomposition wrote). Their body IS the criteria.
         let criteria = ""
-        if (!isEpicChild(intent.issue.body)) {
+        if (!isEpicChild(intent.item.body)) {
           // Tech Lead: fresh chat on the read-only reasoning seat. An
           // unparseable verdict bounces — a confused triager must never
           // green-light work.
@@ -320,17 +341,17 @@ export const runIssue = (
             events: context.events,
             agent: "techlead"
           })
-          const triage = parseTriage(yield* techLead.ask(triagePrompt(intent.issue)))
+          const triage = parseTriage(yield* techLead.ask(triagePrompt(intent.item)))
           if (triage === undefined || triage.kind === "Bounce") {
             const questions =
               triage === undefined
-                ? "Triage could not reach a verdict; please tighten the issue description."
+                ? "Triage could not reach a verdict; please tighten the item description."
                 : triage.questions
-            yield* context.hosting.writeIssueComment(
+            yield* hosting.writeComment(
               ref,
               signed(`Bounced by the Tech Lead:\n\n${questions}`)
             )
-            yield* context.hosting.editIssueLabels(ref, bounce.add, bounce.remove)
+            yield* hosting.editTags(ref, bounce.add, bounce.remove)
             yield* Ref.set(outcome, "Bounced")
             return
           }
@@ -339,12 +360,12 @@ export const runIssue = (
 
         // Engineer: plan once (resumable), then the proven per-task
         // machinery from implementPlanFlow. Stage events are mirrored to
-        // the issue as ▶/✔/✖ progress comments.
-        const brief = engineerBrief(intent.issue, criteria, handbook)
+        // the work item as ▶/✔/✖ progress comments.
+        const brief = engineerBrief(intent.item, criteria, handbook)
         const plan = store
           .recoverOrCreate(planPath, planFrom(context.reasoning, brief))
           .pipe(Effect.map(pruneNonCodingTasks))
-        const progress = yield* makeProgressEvents(context.events, context.hosting, ref)
+        const progress = yield* makeProgressEvents(context.events, hosting, ref)
         yield* implementPlanFlow({ ...context, events: progress }, {
           store,
           planPath,
@@ -354,7 +375,7 @@ export const runIssue = (
           system: [noopRule, handbook.trim()].filter((part) => part.length > 0).join("\n\n"),
           // QA and the CI gate re-judge the final state, so an unconfirmed
           // no-op task completes with a notice instead of sinking the run
-          // (this exact failure burned three attempts on one issue).
+          // (this exact failure burned three attempts on one work item).
           noopTaskPolicy: "complete",
           ...(internalReview ? {} : { reviewers: [] }),
           maxRounds,
@@ -387,7 +408,7 @@ export const runIssue = (
         const reply =
           diff.trim().length === 0
             ? undefined
-            : yield* qa.ask(qaPrompt(intent.issue, criteria, diff, repoFiles))
+            : yield* qa.ask(qaPrompt(intent.item, criteria, diff, repoFiles))
         const verdict =
           reply === undefined
             ? ({ kind: "Reject", findings: "The change produced an empty diff." } as const)
@@ -404,11 +425,11 @@ export const runIssue = (
           )
         }
         if (verdict.kind === "Clarify") {
-          yield* context.hosting.writeIssueComment(
+          yield* hosting.writeComment(
             ref,
             signed(`QA needs clarification before shipping:\n\n${verdict.questions}`)
           )
-          yield* context.hosting.editIssueLabels(ref, bounce.add, bounce.remove)
+          yield* hosting.editTags(ref, bounce.add, bounce.remove)
           yield* Ref.set(outcome, "Bounced")
           return
         }
@@ -428,7 +449,7 @@ export const runIssue = (
             orElse: () =>
               Effect.fail(
                 ProcessError.make({
-                  message: "issue wall clock",
+                  message: "item wall clock",
                   detail:
                     `exceeded ${timeoutMinutes} minutes; completed tasks are ` +
                     "committed and the persisted plan resumes on retry"
@@ -454,16 +475,16 @@ export const runIssue = (
           yield* Effect.ignore(
             run(["git", "-C", worktree, "push", "-u", "origin", branch], workspaceDir)
           )
-          // The critical transition first, alone: gh issue edit dies wholesale
-          // on a label the repo doesn't have, and a partial edit that removed
-          // wip without adding failed strands the issue invisibly (trust-bar
-          // run 1, issue #1). The attempt label is a separate best-effort add.
-          const attempt = attemptOf(intent.issue.labels) + 1
-          yield* Effect.ignore(gh.editIssueLabels(ref, fail.add, fail.remove))
-          yield* Effect.ignore(gh.editIssueLabels(ref, [attemptLabel(attempt)], []))
+          // The critical transition first, alone: a partial tag edit that
+          // removed wip without adding failed strands the work item
+          // invisibly (trust-bar run 1). The attempt tag is a separate
+          // best-effort add.
+          const attempt = attemptOf(intent.item.tags) + 1
+          yield* Effect.ignore(hosting.editTags(ref, fail.add, fail.remove))
+          yield* Effect.ignore(hosting.editTags(ref, [attemptTag(attempt)], []))
           const cells = yield* Ref.get(cellsRef)
           yield* tell(
-            gh,
+            hosting,
             ref,
             [
               `Attempt ${attempt} failed: ${error.message}`,
@@ -494,14 +515,17 @@ export const runIssue = (
         run(["git", "-C", worktree, "log", "--oneline", "origin/HEAD..HEAD"], workspaceDir),
         () => ""
       )
-      // PR creation runs gh in the worktree so the head branch is inferred
-      // from the issue's own checkout, not the daemon's.
-      const worktreeGh = makeGitHubTool(nodeProcessExecutor, worktree, events)
+      // The branch is named explicitly rather than inferred from a working
+      // directory: `az repos pr create` targets a repository, not a cwd, so
+      // one hosting instance opens PRs for every work item.
       yield* Effect.ignore(
         Effect.gen(function* () {
-          const pr = yield* worktreeGh.createPr(
-            intent.issue.title,
-            prBody(intent.issue, {
+          const pr = yield* hosting.createPr(
+            projectRefOf(intent.target),
+            branch,
+            intent.item.id,
+            intent.item.title,
+            prBody(intent.item, {
               qaSummary: summary,
               taskTitles,
               commits,
@@ -512,8 +536,8 @@ export const runIssue = (
           yield* events.publish(Info.make({ message: `opened ${pr.url}` }))
         })
       )
-      yield* Effect.ignore(gh.editIssueLabels(ref, sendToReview.add, sendToReview.remove))
-      yield* tell(gh, ref, `Shipped to review on \`${branch}\`.\n\n${invoice}`)
+      yield* Effect.ignore(hosting.editTags(ref, sendToReview.add, sendToReview.remove))
+      yield* tell(hosting, ref, `Shipped to review on \`${branch}\`.\n\n${invoice}`)
     }
     return { outcome: final, costUsd: totalCost(cells) }
   }).pipe(
@@ -522,7 +546,7 @@ export const runIssue = (
         Effect.tap(() =>
           events.publish(
             Info.make({
-              message: `engineer pipeline error for ${intent.target.slug}#${intent.issue.number}: ${error.message}`
+              message: `engineer pipeline error for ${intent.target.slug}#${intent.item.id}: ${error.message}`
             })
           )
         )

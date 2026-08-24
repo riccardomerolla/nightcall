@@ -12,6 +12,40 @@ Inspired by [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
 with one structural bet: GitHub replaces Paperclip's server, database, and
 UI entirely.
 
+Amendment 2026-08-24 — **this branch replaces the control plane and the
+coder**. Azure DevOps stands in for GitHub and the Gemini CLI stands in for
+Claude Code. Nothing about the org chart, the state machine, the budgets,
+or the governance gates changes; only the backend does. Read the rest of
+this document through this mapping:
+
+| Founding record | This branch                                          |
+| --------------- | ---------------------------------------------------- |
+| GitHub          | Azure DevOps                                         |
+| issue           | work item                                            |
+| label           | tag (one semicolon-joined `System.Tags` field)       |
+| `gh` CLI        | `az` CLI (+ the `azure-devops` extension)            |
+| `owner/repo`    | `project/repository` inside one organization         |
+| `Closes #N`     | `az repos pr create --work-items N` (a real link)    |
+| PR checks       | branch policy evaluations                            |
+| Claude CLI      | Gemini CLI (`LLM4TS_CODER` still overrides)          |
+| `factory/issue-<n>` | `factory/item-<n>`                               |
+
+Two consequences worth stating plainly, because they are not cosmetic:
+
+- **Descriptions and comments are HTML on Azure DevOps.** The protocol's
+  markers (`Blocked-by: #12`, `Parent: #7 (epic)`, the report signature)
+  are line-oriented plain text, so `Azure.ts` converts in both directions
+  and `Azure.test.ts` pins the round trip. A lossy conversion here would
+  silently break epic-child detection and the dependency graph.
+- **Tags are one field, not a set.** Every tag edit is a read-merge-write
+  of `System.Tags`, merged case-insensitively the way the service compares
+  them. The state machine is unchanged; its write is no longer atomic in
+  the way a label add was, which is safe only because a work item is
+  claimed by exactly one stage worker at a time.
+
+The control plane is reached through a port (`src/Hosting.ts`) with one
+adapter (`src/Azure.ts`), so the backend is a swap rather than a rewrite.
+
 Decision record from the founding grilling session, 2026-07-31.
 Implementation status lives in [README.md](README.md); v1 deviations from
 this record: the standup is a comment stream (not a regenerated Mermaid
@@ -128,8 +162,8 @@ backlog self-triage).
 
 ## Workspaces
 
-- Git **worktree per issue**: `.factory/worktrees/issue-<n>/`, branch
-  `factory/issue-<n>`. The factory never touches the human checkout; a
+- Git **worktree per work item**: `.factory/worktrees/<project>__<repo>/item-<n>/`,
+  branch `factory/item-<n>`. The factory never touches the human checkout; a
   crashed run is a self-contained crime scene.
 - Engineer parallelism via `Semaphore(n)`, **default 1** (semantic PR
   collisions arrive before git ones; there is no merge-conflict role).
@@ -170,15 +204,23 @@ Enforced by the Chief of Staff — an LLM never reasons about its own budget.
 
 ## Identity
 
-- v1: CEO's personal PAT; **every** bot comment carries a signature line
-  (`— Nightcall 🌙`). Token via env only — never argv, logs, or errors.
-- Graduates with the trust bar to a dedicated machine account
-  (fine-grained PAT, distinct actor, assignable, revocable). GitHub App
-  only if Nightcall ever serves more than one company.
+- v1: the CEO's own Azure DevOps credential, held **by the `az` CLI**, not
+  by Nightcall — `az devops login`, or `AZURE_DEVOPS_EXT_PAT` which `az`
+  reads for itself. Nightcall never accepts, stores, or forwards a token,
+  and passes an empty environment to every process it launches, so a PAT
+  cannot reach argv, a log line, a trace, or a persisted plan. Git
+  authenticates the clone through the operator's credential helper for the
+  same reason: a PAT embedded in a remote URL would land in `.git/config`.
+- **Every** bot comment carries a signature line (`— Nightcall 🌙`).
+- Graduates with the trust bar to a dedicated Azure DevOps service account
+  (scoped PAT, distinct actor, assignable, revocable).
 
 ## Casting
 
-- Engineer: `coderFromEnv` (`LLM4TS_CODER`, default Claude CLI).
+- Engineer: `coderFromEnv` (`LLM4TS_CODER`), **defaulting to the Gemini
+  CLI** on this branch. The default is pinned in `companyCoder` rather than
+  left to an unset environment variable: a company whose coder changes
+  silently with the environment is not a company.
 - Tech Lead & QA: the derived read-only coder (dogfood-loop precedent).
   No cheaper model for triage in v1 — the Tech Lead makes the
   highest-judgment calls; cost-optimize later from invoice data.

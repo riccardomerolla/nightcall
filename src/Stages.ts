@@ -12,12 +12,11 @@ import { flowReviewer, implementPlanFlow } from "@llm4ts/flow/Flow"
 import type { FlowContextShape } from "@llm4ts/flow/FlowContext"
 import { ProcessError, type FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import { makeGitHubTool, type GitHubToolShape } from "@llm4ts/flow/GitHubTool"
 import { makePlanStore } from "@llm4ts/flow/Persistence"
 import { Plan, Task } from "@llm4ts/flow/Plan"
 import { planFrom } from "@llm4ts/flow/Planner"
 import { lintCommand, minimalReviewers, reviewAndFixLoop } from "@llm4ts/flow/Review"
-import { coderFromEnv, withTurnLimit } from "@llm4ts/runner/Connectors"
+import { withTurnLimit } from "@llm4ts/runner/Connectors"
 import {
   makeFlowRunnerContext,
   nodeFlowRunnerDependencies,
@@ -26,20 +25,22 @@ import {
 import { nodePlainFileStore } from "@llm4ts/runner/NodePlainFileStore"
 import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
-import type { CompanyConfig } from "./Config.ts"
+import type { AzureConfig } from "./Azure.ts"
+import type { HostingShape } from "./Hosting.ts"
 import {
   companyCoder,
   ensureWorktree,
-  issuePaths,
+  workItemPaths,
   positiveIntOr,
   pruneNonCodingTasks,
   readHandbook,
-  resetIssueState,
+  resetWorkItemState,
   run,
   tell,
   totalCost
 } from "./Engineer.ts"
-import { repoRefOf, type ClaimIntent, type Stage, type WorkerReport } from "./Heartbeat.ts"
+import type { ClaimIntent, Stage, WorkerReport } from "./Heartbeat.ts"
+import { projectRefOf, type CompanyConfig } from "./Config.ts"
 import { loadCommentRef, makeChecklistEvents, renderChecklist, saveCommentRef } from "./Checklist.ts"
 import { makeProgressEvents } from "./Progress.ts"
 import {
@@ -55,8 +56,8 @@ import {
   triagePrompt
 } from "./Prompts.ts"
 import {
-  Labels,
-  attemptLabel,
+  Tags,
+  attemptTag,
   attemptOf,
   bounce,
   branchFor,
@@ -73,10 +74,10 @@ import {
 import { timestampedSurface } from "./Surface.ts"
 
 // The staged pipeline: each stage is a small, independently claimable and
-// independently resumable unit that hands off through the label state
+// independently resumable unit that hands off through the tag state
 // machine. The plan file plus the branch ARE the interface between
 // stages — nothing in memory survives a handoff, which is what makes
-// per-stage retry and cross-issue concurrency safe.
+// per-stage retry and cross-item concurrency safe.
 //
 //   ready ─plan▶ planned ─code▶ coded ─review▶ reviewed ─qa▶ review(PR)
 //
@@ -85,7 +86,8 @@ import { timestampedSurface } from "./Surface.ts"
 
 export const runStage = (
   stage: Exclude<Stage, "mend">,
-  gh: GitHubToolShape,
+  hosting: HostingShape,
+  azure: AzureConfig,
   intent: ClaimIntent,
   config: CompanyConfig,
   environment: Readonly<Record<string, string | undefined>>,
@@ -93,44 +95,44 @@ export const runStage = (
   gitLock: Semaphore.Semaphore
 ): Effect.Effect<WorkerReport> =>
   Effect.gen(function* () {
-    const ref = intent.issue.ref(repoRefOf(intent.target))
+    const ref = intent.item.ref(projectRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
-    const stateDir = join(workspaceDir, "state", `${intent.target.owner}__${intent.target.repo}`)
+    const stateDir = join(workspaceDir, "state", `${intent.target.project}__${intent.target.repository}`)
     yield* Effect.tryPromise({
       try: () => mkdir(stateDir, { recursive: true }),
       catch: (error) => ProcessError.make({ message: "mkdir state", detail: String(error) })
     })
-    const planPath = join(stateDir, `issue-${intent.issue.number}-plan.md`)
-    const planCommentPath = join(stateDir, `issue-${intent.issue.number}-plan-comment.json`)
+    const planPath = join(stateDir, `item-${intent.item.id}-plan.md`)
+    const planCommentPath = join(stateDir, `item-${intent.item.id}-plan-comment.json`)
 
-    if (stage === "plan" && isFresh(intent.issue.labels)) {
-      yield* resetIssueState(workspaceDir, intent, planPath)
-      yield* Effect.ignore(gh.editIssueLabels(ref, [], [Labels.fresh]))
+    if (stage === "plan" && isFresh(intent.item.tags)) {
+      yield* resetWorkItemState(workspaceDir, intent, planPath)
+      yield* Effect.ignore(hosting.editTags(ref, [], [Tags.fresh]))
       yield* tell(
-        gh,
+        hosting,
         ref,
         "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded."
       )
     }
 
-    const worktree = yield* ensureWorktree(workspaceDir, intent, gitLock)
+    const worktree = yield* ensureWorktree(workspaceDir, azure, intent, gitLock)
     const handbook = yield* readHandbook(process.cwd())
-    const budgetUsd = budgetOverrideUsd(intent.issue.labels) ?? config.issueBudgetUsd
-    const branch = branchFor(intent.issue.number)
+    const budgetUsd = budgetOverrideUsd(intent.item.tags) ?? config.issueBudgetUsd
+    const branch = branchFor(intent.item.id)
     const gate = environment["NIGHTCALL_GATE"]?.trim()
     const turnLimit = positiveIntOr(environment["NIGHTCALL_TURN_LIMIT"], 50)
     const maxRounds = positiveIntOr(environment["NIGHTCALL_MAX_ROUNDS"], 1)
     const timeoutMinutes = positiveIntOr(environment["NIGHTCALL_ISSUE_TIMEOUT_MINUTES"], 30)
 
     const startedAtMs = yield* Clock.currentTimeMillis
-    const runId = `nightcall-${stage}-${intent.issue.number}-${startedAtMs}`
+    const runId = `nightcall-${stage}-${intent.item.id}-${startedAtMs}`
     const store = makePlanStore(nodePlainFileStore)
     const dependencies = nodeFlowRunnerDependencies()
     const coder = withTurnLimit(companyCoder(environment), turnLimit)
     const options = {
       workDir: worktree,
       workspace: worktree,
-      userPrompt: engineerBrief(intent.issue, "", handbook),
+      userPrompt: engineerBrief(intent.item, "", handbook),
       coder: CliConnectorConfig.make({ ...coder, workingDir: worktree }),
       tracePath: join(stateDir, `trace-${runId}.jsonl`),
       runId,
@@ -151,36 +153,36 @@ export const runStage = (
     const planBody = (context: FlowContextShape): Effect.Effect<void, FlowError> =>
       Effect.gen(function* () {
         let criteria = ""
-        if (!isEpicChild(intent.issue.body)) {
+        if (!isEpicChild(intent.item.body)) {
           const techLead = yield* makeChat(context.reasoning, {
             system: handbook,
             events: context.events,
             agent: "techlead"
           })
-          const triage = parseTriage(yield* techLead.ask(triagePrompt(intent.issue)))
+          const triage = parseTriage(yield* techLead.ask(triagePrompt(intent.item)))
           if (triage === undefined || triage.kind === "Bounce") {
             const questions =
               triage === undefined
-                ? "Triage could not reach a verdict; please tighten the issue description."
+                ? "Triage could not reach a verdict; please tighten the item description."
                 : triage.questions
-            yield* context.hosting.writeIssueComment(
+            yield* hosting.writeComment(
               ref,
               signed(`Bounced by the Tech Lead:\n\n${questions}`)
             )
-            yield* context.hosting.editIssueLabels(ref, bounce.add, bounce.remove)
+            yield* hosting.editTags(ref, bounce.add, bounce.remove)
             yield* Ref.set(outcome, "Bounced")
             return
           }
           criteria = triage.criteria
         }
-        const brief = engineerBrief(intent.issue, criteria, handbook)
+        const brief = engineerBrief(intent.item, criteria, handbook)
         const plan = yield* store
           .recoverOrCreate(planPath, planFrom(context.reasoning, brief))
           .pipe(Effect.map(pruneNonCodingTasks))
         // The plan is posted as ONE task-list comment; its reference is
         // persisted so the code stage keeps checking items off by editing
         // the same comment.
-        const commentRef = yield* context.hosting.writeIssueComment(
+        const commentRef = yield* hosting.writeComment(
           ref,
           renderChecklist(
             plan.epicId,
@@ -193,7 +195,7 @@ export const runStage = (
         if (commentRef !== undefined) {
           yield* saveCommentRef(planCommentPath, commentRef)
         }
-        yield* context.hosting.editIssueLabels(ref, donePlan.add, donePlan.remove)
+        yield* hosting.editTags(ref, donePlan.add, donePlan.remove)
         yield* Ref.set(outcome, "Advanced")
       })
 
@@ -204,12 +206,12 @@ export const runStage = (
           return yield* Effect.fail(
             ProcessError.make({
               message: "code stage",
-              detail: "no persisted plan for this issue; run the plan stage first"
+              detail: "no persisted plan for this item; run the plan stage first"
             })
           )
         }
         // A plan with nothing left to do means this round exists because
-        // someone sent the issue back. Two task sources, in priority order:
+        // someone sent the item back. Two task sources, in priority order:
         // a red gate (deterministic — the machine knows what is broken),
         // then human guidance comments since Nightcall's last report.
         if (pruneNonCodingTasks(persisted).nextIncomplete === undefined) {
@@ -243,11 +245,11 @@ export const runStage = (
           }
         }
         // Human guidance becomes a task on EVERY round — a CEO steering a
-        // mid-plan issue must not be ignored until the plan completes.
+        // mid-plan item must not be ignored until the plan completes.
         // Deduped: skip when the newest guidance already has its task.
         {
-          const comments = yield* context.hosting
-            .readIssueComments(ref)
+          const comments = yield* hosting
+            .readComments(ref)
             .pipe(Effect.orElseSucceed(() => []))
           const guidance = guidanceSince(comments, signature)
           const guidanceText = guidance
@@ -277,10 +279,10 @@ export const runStage = (
         const commentRef = yield* loadCommentRef(planCommentPath)
         const progress =
           commentRef === undefined
-            ? yield* makeProgressEvents(context.events, context.hosting, ref)
+            ? yield* makeProgressEvents(context.events, hosting, ref)
             : yield* makeChecklistEvents(
                 context.events,
-                context.hosting,
+                hosting,
                 commentRef,
                 persisted.epicId,
                 persisted.tasks.map((task) => ({ title: task.title, completed: task.completed }))
@@ -301,7 +303,7 @@ export const runStage = (
           }
         )
         yield* context.git.push("origin", branch)
-        yield* context.hosting.editIssueLabels(ref, doneCode.add, doneCode.remove)
+        yield* hosting.editTags(ref, doneCode.add, doneCode.remove)
         yield* Ref.set(outcome, "Advanced")
       })
 
@@ -318,7 +320,7 @@ export const runStage = (
           reviewers: minimalReviewers,
           reviewerService: flowReviewer(context),
           coder: coderChat,
-          taskTitle: `#${intent.issue.number} ${intent.issue.title}`,
+          taskTitle: `#${intent.item.id} ${intent.item.title}`,
           currentDiff: context.git.diffVsBase(base, true),
           events: context.events,
           maxRounds,
@@ -326,10 +328,10 @@ export const runStage = (
         })
         const dirty = yield* context.git.diffAll
         if (dirty.trim().length > 0) {
-          yield* context.git.commitAll(`review fixes for #${intent.issue.number}`)
+          yield* context.git.commitAll(`review fixes for #${intent.item.id}`)
         }
         yield* context.git.push("origin", branch)
-        yield* context.hosting.editIssueLabels(ref, doneReview.add, doneReview.remove)
+        yield* hosting.editTags(ref, doneReview.add, doneReview.remove)
         yield* Ref.set(outcome, "Advanced")
       })
 
@@ -337,12 +339,12 @@ export const runStage = (
       Effect.gen(function* () {
         // CEO override: factory:ship skips the QA verdict entirely — the
         // human has judged the work done. Recorded in the PR body.
-        if (intent.issue.labels.includes(Labels.ship)) {
+        if (intent.item.tags.includes(Tags.ship)) {
           yield* Ref.set(
             qaSummary,
             "Review: shipped by CEO override (factory:ship); the QA verdict was waived."
           )
-          yield* Effect.ignore(gh.editIssueLabels(ref, [], [Labels.ship]))
+          yield* Effect.ignore(hosting.editTags(ref, [], [Tags.ship]))
           yield* context.git.push("origin", branch)
           yield* Ref.set(outcome, "Shipped")
           return
@@ -372,7 +374,7 @@ export const runStage = (
         const reply =
           diff.trim().length === 0
             ? undefined
-            : yield* qa.ask(qaPrompt(intent.issue, criteria, diff, repoFiles))
+            : yield* qa.ask(qaPrompt(intent.item, criteria, diff, repoFiles))
         const verdict =
           reply === undefined
             ? ({ kind: "Reject", findings: "The change produced an empty diff." } as const)
@@ -388,30 +390,30 @@ export const runStage = (
         if (verdict.kind === "Clarify") {
           // QA's upward channel: intent/scope questions go to the human,
           // the pipeline parks at needs-info instead of burning attempts.
-          yield* context.hosting.writeIssueComment(
+          yield* hosting.writeComment(
             ref,
             signed(`QA needs clarification before shipping:\n\n${verdict.questions}`)
           )
-          yield* context.hosting.editIssueLabels(
+          yield* hosting.editTags(
             ref,
-            [Labels.needsInfo],
-            [Labels.wip, Labels.reviewed]
+            [Tags.needsInfo],
+            [Tags.wip, Tags.reviewed]
           )
           yield* Ref.set(outcome, "Bounced")
           return
         }
         if (verdict.kind === "Reject") {
-          const attempt = attemptOf(intent.issue.labels) + 1
-          if (attemptOf(intent.issue.labels) >= config.maxAttempts) {
+          const attempt = attemptOf(intent.item.tags) + 1
+          if (attemptOf(intent.item.tags) >= config.maxAttempts) {
             // Ask for help instead of failing: the engineer's rounds are not
-            // converging, so the issue parks at needs-info with a full
+            // converging, so the item parks at needs-info with a full
             // account and the CEO's options. Guidance comments feed the next
             // round's plan (see the code stage).
-            yield* context.hosting.writeIssueComment(
+            yield* hosting.writeComment(
               ref,
               signed(
                 [
-                  `This issue is stuck: QA has rejected ${attempt} round(s) of fixes`,
+                  `This item is stuck: QA has rejected ${attempt} round(s) of fixes`,
                   "and the engineer is not converging. Latest findings:",
                   "",
                   verdict.findings,
@@ -421,19 +423,19 @@ export const runStage = (
                   "How should we proceed? Your moves:",
                   "- Reply with guidance as a comment, then add `factory:planned`",
                   "  — the engineer runs another round applying your guidance.",
-                  "- Take the branch over manually, or close this issue."
+                  "- Take the branch over manually, or close this item."
                 ].join("\n")
               )
             )
-            yield* context.hosting.editIssueLabels(
+            yield* hosting.editTags(
               ref,
-              [Labels.needsInfo],
-              [Labels.wip, Labels.reviewed]
+              [Tags.needsInfo],
+              [Tags.wip, Tags.reviewed]
             )
             yield* Ref.set(outcome, "Bounced")
             return
           }
-          // Findings become a plan task and the issue loops back through
+          // Findings become a plan task and the item loops back through
           // code → review → QA — the iteration the org chart promised.
           const planned = yield* store.load(planPath)
           if (planned !== undefined) {
@@ -452,16 +454,16 @@ export const runStage = (
               })
             )
           }
-          yield* context.hosting.writeIssueComment(
+          yield* hosting.writeComment(
             ref,
             signed(
               `QA requested changes (round ${attempt}) — sending back to the code stage:\n\n${verdict.findings}`
             )
           )
-          yield* context.hosting.editIssueLabels(
+          yield* hosting.editTags(
             ref,
-            [Labels.planned, attemptLabel(attempt)],
-            [Labels.wip, Labels.reviewed]
+            [Tags.planned, attemptTag(attempt)],
+            [Tags.wip, Tags.reviewed]
           )
           yield* Ref.set(outcome, "Iterated")
           return
@@ -518,27 +520,27 @@ export const runStage = (
           if (error._tag === "BudgetExceeded") {
             // Running out of budget is a governance pause, not an
             // engineering failure: the committed work stands, no attempt
-            // is burned. The CEO approves more spend with a budget label.
-            // Strip every queue label too: the stage checkpoints outrank
+            // is burned. The CEO approves more spend with a budget tag.
+            // Strip every queue tag too: the stage checkpoints outrank
             // needs-info in phase precedence, so leaving them would let
-            // the next beat re-claim the paused issue and keep spending.
+            // the next beat re-claim the paused item and keep spending.
             yield* Effect.ignore(
-              gh.editIssueLabels(
+              hosting.editTags(
                 ref,
-                [Labels.needsInfo],
-                [Labels.wip, Labels.ready, Labels.planned, Labels.coded, Labels.reviewed]
+                [Tags.needsInfo],
+                [Tags.wip, Tags.ready, Tags.planned, Tags.coded, Tags.reviewed]
               )
             )
             yield* tell(
-              gh,
+              hosting,
               ref,
               [
-                `Budget exhausted during the ${stage} stage: this issue's`,
+                `Budget exhausted during the ${stage} stage: this item's`,
                 `budget is $${budgetUsd.toFixed(2)} and the run exceeded it.`,
                 "Completed work is committed and pushed on the branch.",
                 "",
                 `To authorize more: add \`factory:budget-${Math.ceil(budgetUsd * 2)}\``,
-                "(or any factory:budget-N) plus the stage's queue label",
+                "(or any factory:budget-N) plus the stage's queue tag",
                 `(\`factory:${stage === "plan" ? "ready" : stage === "code" ? "planned" : stage === "review" ? "coded" : "reviewed"}\`) and remove factory:needs-info.`,
                 "Or close/reassign if the spend is not worth it.",
                 "",
@@ -548,11 +550,11 @@ export const runStage = (
             yield* Ref.set(outcome, "Bounced")
             return
           }
-          const attempt = attemptOf(intent.issue.labels) + 1
-          yield* Effect.ignore(gh.editIssueLabels(ref, fail.add, fail.remove))
-          yield* Effect.ignore(gh.editIssueLabels(ref, [attemptLabel(attempt)], []))
+          const attempt = attemptOf(intent.item.tags) + 1
+          yield* Effect.ignore(hosting.editTags(ref, fail.add, fail.remove))
+          yield* Effect.ignore(hosting.editTags(ref, [attemptTag(attempt)], []))
           yield* tell(
-            gh,
+            hosting,
             ref,
             [
               `${stage} stage, attempt ${attempt} failed: ${error.message}`,
@@ -580,12 +582,14 @@ export const runStage = (
         run(["git", "-C", worktree, "log", "--oneline", "origin/HEAD..HEAD"], workspaceDir),
         () => ""
       )
-      const worktreeGh = makeGitHubTool(nodeProcessExecutor, worktree, events)
       yield* Effect.ignore(
         Effect.gen(function* () {
-          const pr = yield* worktreeGh.createPr(
-            intent.issue.title,
-            prBody(intent.issue, {
+          const pr = yield* hosting.createPr(
+            projectRefOf(intent.target),
+            branch,
+            intent.item.id,
+            intent.item.title,
+            prBody(intent.item, {
               qaSummary: summary,
               taskTitles,
               commits,
@@ -596,8 +600,8 @@ export const runStage = (
           yield* events.publish(Info.make({ message: `opened ${pr.url}` }))
         })
       )
-      yield* Effect.ignore(gh.editIssueLabels(ref, doneQa.add, doneQa.remove))
-      yield* tell(gh, ref, `Shipped to review on \`${branch}\`.\n\n${invoice}`)
+      yield* Effect.ignore(hosting.editTags(ref, doneQa.add, doneQa.remove))
+      yield* tell(hosting, ref, `Shipped to review on \`${branch}\`.\n\n${invoice}`)
     }
     return { outcome: final, costUsd: totalCost(cells) }
   }).pipe(
@@ -606,7 +610,7 @@ export const runStage = (
         Effect.tap(() =>
           events.publish(
             Info.make({
-              message: `${stage} stage pipeline error for ${intent.target.slug}#${intent.issue.number}: ${error.message}`
+              message: `${stage} stage pipeline error for ${intent.target.slug}#${intent.item.id}: ${error.message}`
             })
           )
         )
@@ -621,7 +625,7 @@ export const runStage = (
 // heals in place. Failure marks factory:failed but keeps factory:review,
 // so a human can strip failed to retry after the queue settles.
 export const runMend = (
-  gh: GitHubToolShape,
+  hosting: HostingShape,
   intent: ClaimIntent,
   config: CompanyConfig,
   environment: Readonly<Record<string, string | undefined>>,
@@ -629,12 +633,12 @@ export const runMend = (
   gitLock: Semaphore.Semaphore
 ): Effect.Effect<WorkerReport> =>
   Effect.gen(function* () {
-    const ref = intent.issue.ref(repoRefOf(intent.target))
+    const ref = intent.item.ref(projectRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
-    const { repoDir, worktree } = issuePaths(workspaceDir, intent)
-    const branch = branchFor(intent.issue.number)
+    const { repoDir, worktree } = workItemPaths(workspaceDir, intent)
+    const branch = branchFor(intent.item.id)
     const gate = environment["NIGHTCALL_GATE"]?.trim()
-    const unclaim = Effect.ignore(gh.editIssueLabels(ref, [], [Labels.wip]))
+    const unclaim = Effect.ignore(hosting.editTags(ref, [], [Tags.wip]))
     const attempt = (effect: Effect.Effect<string, FlowError>): Effect.Effect<boolean> =>
       effect.pipe(
         Effect.as(true),
@@ -692,26 +696,27 @@ export const runMend = (
       environment["NIGHTCALL_AUTO_MERGE"] === "off"
         ? Effect.succeed(false)
         : Effect.gen(function* () {
-            const worktreeGh = makeGitHubTool(nodeProcessExecutor, worktree, events)
-            const pr = yield* worktreeGh.viewOpenPr.pipe(
-              Effect.orElseSucceed(() => undefined)
-            )
+            const pr = yield* hosting
+              .openPr(projectRefOf(intent.target), branch)
+              .pipe(Effect.orElseSucceed(() => undefined))
             if (pr === undefined) {
               return false
             }
-            const checks = yield* worktreeGh.prChecks(pr).pipe(
-              Effect.orElseSucceed(() => "Pending" as const)
-            )
-            if (checks === "Failure" || checks === "TimedOut") {
-              // A red CI run is a real failure, not a waiting state: park
-              // the issue as failed with instructions (the failed phase
-              // also stops mend from re-visiting, so this comments once).
-              yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], []))
+            // Branch policies are Azure DevOps' checks: a build policy that
+            // has not reported is Pending, a rejected one is Failure.
+            const checks = yield* hosting
+              .prChecks(pr)
+              .pipe(Effect.orElseSucceed(() => "Pending" as const))
+            if (checks === "Failure") {
+              // A red policy run is a real failure, not a waiting state:
+              // park the work item as failed with instructions (the failed
+              // phase also stops mend re-visiting, so this comments once).
+              yield* Effect.ignore(hosting.editTags(ref, [Tags.failed], []))
               yield* tell(
-                gh,
+                hosting,
                 ref,
                 [
-                  `PR #${pr.number} CI is red (${checks}) — auto-merge is held.`,
+                  `PR #${pr.id} CI is red (${checks}) — auto-merge is held.`,
                   `See the checks on ${pr.url}.`,
                   "Strip factory:failed and add factory:planned (with guidance",
                   "if useful) to run a fix round, or inspect the branch."
@@ -722,20 +727,20 @@ export const runMend = (
             if (checks !== "Success") {
               yield* events.publish(
                 Info.make({
-                  message: `auto-merge: PR #${pr.number} checks ${checks}; waiting`
+                  message: `auto-merge: PR #${pr.id} checks ${checks}; waiting`
                 })
               )
               return false
             }
-            const merged = yield* worktreeGh.mergePr(pr).pipe(
+            const merged = yield* hosting.mergePr(pr).pipe(
               Effect.as(true),
               Effect.orElseSucceed(() => false)
             )
             if (merged) {
               yield* tell(
-                gh,
+                hosting,
                 ref,
-                `Shipped: PR #${pr.number} merged automatically (checks green). 🚀`
+                `Shipped: PR #${pr.id} merged automatically (checks green). 🚀`
               )
             }
             return merged
@@ -765,9 +770,9 @@ export const runMend = (
       const options = {
         workDir: worktree,
         workspace: worktree,
-        userPrompt: `Resolve rebase conflicts for #${intent.issue.number}`,
+        userPrompt: `Resolve rebase conflicts for #${intent.item.id}`,
         coder: CliConnectorConfig.make({ ...coder, workingDir: worktree }),
-        runId: `nightcall-mend-${intent.issue.number}-${startedAtMs}`,
+        runId: `nightcall-mend-${intent.item.id}-${startedAtMs}`,
         surface: timestampedSurface(),
         verbosity: parseVerbosity(environment["LLM4TS_VERBOSITY"] ?? "verbose")
       }
@@ -863,9 +868,9 @@ export const runMend = (
           run(["git", "-C", worktree, "rebase", "--abort"], workspaceDir)
         )
         const cells = yield* Ref.get(cellsRef)
-        yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], [Labels.wip]))
+        yield* Effect.ignore(hosting.editTags(ref, [Tags.failed], [Tags.wip]))
         yield* tell(
-          gh,
+          hosting,
           ref,
           "Mend failed: the rebase onto main could not be resolved automatically. " +
             "The branch is unchanged; strip factory:failed to retry, or resolve manually.\n\n" +
@@ -877,7 +882,7 @@ export const runMend = (
 
     // Rebase complete — PUSH FIRST, gate second. The rebase itself is
     // good; leaving it unpushed forked the worktree from the remote and
-    // broke every later stage's plain push (issue #40). A red gate then
+    // broke every later stage's plain push. A red gate then
     // means "don't auto-merge", with the PR honestly conflicted-free and
     // CI showing the truth.
     yield* run(
@@ -895,9 +900,9 @@ export const runMend = (
         )
       )
       if (gateFailure !== undefined) {
-        yield* Effect.ignore(gh.editIssueLabels(ref, [Labels.failed], [Labels.wip]))
+        yield* Effect.ignore(hosting.editTags(ref, [Tags.failed], [Tags.wip]))
         yield* tell(
-          gh,
+          hosting,
           ref,
           [
             "Mend: the branch is rebased onto main and pushed, but the gate",
@@ -916,7 +921,7 @@ export const runMend = (
     }
     const cells = yield* Ref.get(cellsRef)
     yield* tell(
-      gh,
+      hosting,
       ref,
       resolvedRounds === 0
         ? "Rebased onto main cleanly; the PR is mergeable again."

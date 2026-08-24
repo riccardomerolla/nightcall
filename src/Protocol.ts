@@ -1,11 +1,11 @@
 import * as Schema from "effect/Schema"
 
-// The factory:* label protocol (DESIGN.md "Issue protocol"). Labels on the
-// target repo are the only org-level state; these pure functions are the
-// entire state machine. Anything effectful (gh calls, fibers, budgets)
-// lives above this module.
+// The factory:* tag protocol (DESIGN.md "Work item protocol"). Tags on the
+// target project's work items are the only org-level state; these pure
+// functions are the entire state machine. Anything effectful (az calls,
+// fibers, budgets) lives above this module.
 
-export const Labels = {
+export const Tags = {
   ready: "factory:ready",
   epic: "factory:epic",
   needsInfo: "factory:needs-info",
@@ -13,11 +13,11 @@ export const Labels = {
   review: "factory:review",
   failed: "factory:failed",
   // One-shot modifier set by the CEO next to factory:ready: discard all
-  // prior state for the issue (worktree, persisted plan, branch — local
+  // prior state for the work item (worktree, persisted plan, branch — local
   // and remote) and start from a brand-new branch off origin/HEAD. The
   // orchestrator strips it once the reset is applied.
   fresh: "factory:fresh",
-  // Staged-pipeline checkpoints (orchestrator-owned). An issue sits at
+  // Staged-pipeline checkpoints (orchestrator-owned). A work item sits at
   // exactly one of these between stage runs; wip marks a stage worker on
   // it right now. ready → planned → coded → reviewed → review.
   planned: "factory:planned",
@@ -33,9 +33,9 @@ export const Labels = {
   ship: "factory:ship"
 } as const
 
-export const budgetLabelPrefix = "factory:budget-"
+export const budgetTagPrefix = "factory:budget-"
 
-export const IssuePhase = Schema.Literals([
+export const WorkItemPhase = Schema.Literals([
   "Ready",
   "NeedsInfo",
   "InProgress",
@@ -46,98 +46,98 @@ export const IssuePhase = Schema.Literals([
   "Failed",
   "Unmanaged"
 ])
-export type IssuePhase = typeof IssuePhase.Type
+export type WorkItemPhase = typeof WorkItemPhase.Type
 
-// Precedence resolves contradictory label sets left over from partial
+// Precedence resolves contradictory tag sets left over from partial
 // writes: a terminal or in-flight marker outranks stage checkpoints,
 // which outrank readiness.
-export const phaseOf = (labels: ReadonlyArray<string>): IssuePhase => {
-  const has = (label: string): boolean => labels.includes(label)
-  return has(Labels.failed)
+export const phaseOf = (tags: ReadonlyArray<string>): WorkItemPhase => {
+  const has = (tag: string): boolean => tags.includes(tag)
+  return has(Tags.failed)
     ? "Failed"
-    : has(Labels.review)
+    : has(Tags.review)
       ? "InReview"
-      : has(Labels.wip)
+      : has(Tags.wip)
         ? "InProgress"
-        : has(Labels.reviewed)
+        : has(Tags.reviewed)
           ? "Reviewed"
-          : has(Labels.coded)
+          : has(Tags.coded)
             ? "Coded"
-            : has(Labels.planned)
+            : has(Tags.planned)
               ? "Planned"
-              : has(Labels.needsInfo)
+              : has(Tags.needsInfo)
                 ? "NeedsInfo"
-                : has(Labels.ready)
+                : has(Tags.ready)
                   ? "Ready"
                   : "Unmanaged"
 }
 
-export const isEpic = (labels: ReadonlyArray<string>): boolean => labels.includes(Labels.epic)
+export const isEpic = (tags: ReadonlyArray<string>): boolean => tags.includes(Tags.epic)
 
-export const isFresh = (labels: ReadonlyArray<string>): boolean => labels.includes(Labels.fresh)
+export const isFresh = (tags: ReadonlyArray<string>): boolean => tags.includes(Tags.fresh)
 
-export const budgetOverrideUsd = (labels: ReadonlyArray<string>): number | undefined => {
-  const parsed = labels
-    .filter((label) => label.startsWith(budgetLabelPrefix))
-    .map((label) => Number.parseInt(label.slice(budgetLabelPrefix.length), 10))
+export const budgetOverrideUsd = (tags: ReadonlyArray<string>): number | undefined => {
+  const parsed = tags
+    .filter((tag) => tag.startsWith(budgetTagPrefix))
+    .map((tag) => Number.parseInt(tag.slice(budgetTagPrefix.length), 10))
     .filter((value) => Number.isInteger(value) && value > 0)
   return parsed.length === 0 ? undefined : Math.max(...parsed)
 }
 
-// A transition names the label edit that moves an issue between phases.
-// The orchestrator performs it as its FIRST write for the issue
+// A transition names the tag edit that moves a work item between phases.
+// The orchestrator performs it as its FIRST write for the item
 // (first-write-wins claim; see DESIGN.md).
 export class Transition extends Schema.Class<Transition>("Transition")({
   add: Schema.Array(Schema.String),
   remove: Schema.Array(Schema.String)
 }) {}
 
-export const claim = Transition.make({ add: [Labels.wip], remove: [Labels.ready] })
+export const claim = Transition.make({ add: [Tags.wip], remove: [Tags.ready] })
 // Staged pipeline: a stage worker marks wip while running, then swaps the
 // checkpoint on success. Failure removes only wip (Engineer adds failed),
 // keeping the checkpoint so a retry resumes at the same stage.
-export const stageClaim = Transition.make({ add: [Labels.wip], remove: [] })
+export const stageClaim = Transition.make({ add: [Tags.wip], remove: [] })
 export const donePlan = Transition.make({
-  add: [Labels.planned],
-  remove: [Labels.wip, Labels.ready]
+  add: [Tags.planned],
+  remove: [Tags.wip, Tags.ready]
 })
 export const doneCode = Transition.make({
-  add: [Labels.coded],
-  remove: [Labels.wip, Labels.planned]
+  add: [Tags.coded],
+  remove: [Tags.wip, Tags.planned]
 })
 export const doneReview = Transition.make({
-  add: [Labels.reviewed],
-  remove: [Labels.wip, Labels.coded]
+  add: [Tags.reviewed],
+  remove: [Tags.wip, Tags.coded]
 })
 export const doneQa = Transition.make({
-  add: [Labels.review],
-  remove: [Labels.wip, Labels.reviewed]
+  add: [Tags.review],
+  remove: [Tags.wip, Tags.reviewed]
 })
 // Bounce can happen before a claim (epic triage) or after one (engineer
-// pipeline), so it clears both queue markers — a bounced issue must never
-// keep occupying an engineer seat via a leftover wip label.
+// pipeline), so it clears both queue markers — a bounced work item must
+// never keep occupying an engineer seat via a leftover wip tag.
 export const bounce = Transition.make({
-  add: [Labels.needsInfo],
-  remove: [Labels.ready, Labels.wip]
+  add: [Tags.needsInfo],
+  remove: [Tags.ready, Tags.wip]
 })
-export const sendToReview = Transition.make({ add: [Labels.review], remove: [Labels.wip] })
+export const sendToReview = Transition.make({ add: [Tags.review], remove: [Tags.wip] })
 export const fail = Transition.make({
-  add: [Labels.failed],
-  remove: [Labels.wip, Labels.review]
+  add: [Tags.failed],
+  remove: [Tags.wip, Tags.review]
 })
 
-export const branchFor = (issueNumber: number): string => `factory/issue-${issueNumber}`
+export const branchFor = (workItemId: number): string => `factory/item-${workItemId}`
 
-// Attempt bookkeeping lives in labels like everything else, so the
+// Attempt bookkeeping lives in tags like everything else, so the
 // max-attempts guard survives daemon restarts without local state.
 export const attemptPrefix = "factory:attempt-"
 
-export const attemptLabel = (attempt: number): string => `${attemptPrefix}${attempt}`
+export const attemptTag = (attempt: number): string => `${attemptPrefix}${attempt}`
 
-export const attemptOf = (labels: ReadonlyArray<string>): number => {
-  const attempts = labels
-    .filter((label) => label.startsWith(attemptPrefix))
-    .map((label) => Number.parseInt(label.slice(attemptPrefix.length), 10))
+export const attemptOf = (tags: ReadonlyArray<string>): number => {
+  const attempts = tags
+    .filter((tag) => tag.startsWith(attemptPrefix))
+    .map((tag) => Number.parseInt(tag.slice(attemptPrefix.length), 10))
     .filter((value) => Number.isInteger(value) && value > 0)
   return attempts.length === 0 ? 0 : Math.max(...attempts)
 }

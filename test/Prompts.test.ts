@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { CostCell } from "@llm4ts/flow/CostLedger"
-import { IssueSummary } from "@llm4ts/flow/GitHubTool"
+import { WorkItemSummary } from "../src/Hosting.ts"
 import {
   blockedByRefs,
   guidanceSince,
@@ -13,14 +13,15 @@ import {
   renderInvoice
 } from "../src/Prompts.ts"
 import { epicChildrenStatus } from "../src/EpicWatch.ts"
-import { Labels, attemptLabel, attemptOf, bounce } from "../src/Protocol.ts"
+import { Tags, attemptTag, attemptOf, bounce } from "../src/Protocol.ts"
 
-const issue = IssueSummary.make({
-  number: 7,
+const issue = WorkItemSummary.make({
+  id: 7,
   title: "Add a --version flag",
   body: "The CLI should print its version.",
   author: "ceo",
-  labels: [],
+  tags: [],
+  state: "Active",
   updatedAt: "2026-07-31T00:00:00Z"
 })
 
@@ -113,7 +114,7 @@ describe("Prompts", () => {
       gateCommand: "npm run gate",
       invoice
     })
-    assert.include(body, "Closes #7 — Add a --version flag.")
+    assert.include(body, "Work item #7 — Add a --version flag.")
     assert.include(body, "## What this delivers")
     assert.include(body, "Users can now see the CLI version at a glance.")
     assert.include(body, "- Add kebabCase")
@@ -182,7 +183,7 @@ describe("Prompts", () => {
   it("recognizes epic children and clears both queue markers on bounce", () => {
     assert.isTrue(isEpicChild("Do the thing.\n\nParent: #11 (epic)"))
     assert.isFalse(isEpicChild("Do the thing. See #11."))
-    assert.deepStrictEqual([...bounce.remove], [Labels.ready, Labels.wip])
+    assert.deepStrictEqual([...bounce.remove], [Tags.ready, Tags.wip])
   })
 
   it("extracts CEO guidance after the last signed report", () => {
@@ -202,13 +203,14 @@ describe("Prompts", () => {
   })
 
   it("derives epic children status from the parent marker", () => {
-    const child = (number: number, parent: number): IssueSummary =>
-      IssueSummary.make({
-        number,
-        title: `Child ${number}`,
+    const child = (id: number, parent: number): WorkItemSummary =>
+      WorkItemSummary.make({
+        id,
+        title: `Child ${id}`,
         body: `Work.\n\nParent: #${parent} (epic)`,
         author: "bot",
-        labels: [],
+        tags: [],
+        state: "Active",
         updatedAt: "2026-08-04T00:00:00Z"
       })
     const all = [child(2, 1), child(3, 1), child(9, 8)]
@@ -222,8 +224,8 @@ describe("Prompts", () => {
 
   it("tracks attempts through labels", () => {
     assert.strictEqual(attemptOf([]), 0)
-    assert.strictEqual(attemptOf(["factory:wip", attemptLabel(2)]), 2)
-    assert.strictEqual(attemptOf([attemptLabel(1), attemptLabel(3)]), 3)
-    assert.strictEqual(attemptLabel(1), "factory:attempt-1")
+    assert.strictEqual(attemptOf(["factory:wip", attemptTag(2)]), 2)
+    assert.strictEqual(attemptOf([attemptTag(1), attemptTag(3)]), 3)
+    assert.strictEqual(attemptTag(1), "factory:attempt-1")
   })
 })

@@ -5,7 +5,8 @@ import { assert, describe, it } from "@effect/vitest"
 import * as Effect from "effect/Effect"
 import * as Ref from "effect/Ref"
 import { StageCompleted, StageFailed, StageStarted, makeCollectingFlowEvents } from "@llm4ts/flow/FlowEvents"
-import { IssueCommentRef, type GitHubToolShape } from "@llm4ts/flow/GitHubTool"
+import { CommentRef } from "../src/Hosting.ts"
+import { stubHosting } from "./FakeHosting.ts"
 import {
   loadCommentRef,
   makeChecklistEvents,
@@ -13,28 +14,15 @@ import {
   saveCommentRef
 } from "../src/Checklist.ts"
 
-const comment = IssueCommentRef.make({ owner: "acme", repo: "widgets", id: 42 })
+const comment = CommentRef.make({ project: "acme", workItemId: 7, id: 42 })
 
-const editCollector = (edits: Ref.Ref<ReadonlyArray<string>>): GitHubToolShape => ({
-  createPr: () => Effect.die("unused"),
-  readIssue: () => Effect.die("unused"),
-  readIssueComments: () => Effect.die("unused"),
-  writeIssueComment: () => Effect.die("unused"),
-  editIssueComment: (_comment, body) => Ref.update(edits, (existing) => [...existing, body]),
-  writePrComment: () => Effect.die("unused"),
-  updatePr: () => Effect.die("unused"),
-  prChecks: () => Effect.die("unused"),
-  viewOpenPr: Effect.die("unused"),
-  mergePr: () => Effect.die("unused"),
-  listIssues: () => Effect.die("unused"),
-  createIssue: () => Effect.die("unused"),
-  editIssueLabels: () => Effect.die("unused"),
-  assignIssue: () => Effect.die("unused"),
-  closeIssue: () => Effect.die("unused")
-})
+const editCollector = (edits: Ref.Ref<ReadonlyArray<string>>) =>
+  stubHosting({
+    editComment: (_comment, body) => Ref.update(edits, (existing) => [...existing, body])
+  })
 
 describe("Checklist", () => {
-  it("renders GitHub task-list syntax for every progress state", () => {
+  it("renders task-list syntax for every progress state", () => {
     const body = renderChecklist("deterministic-rebalancing", [
       { title: "Expose violations", progress: "done", note: "5m44s" },
       { title: "Propose trades", progress: "running" },
@@ -57,7 +45,8 @@ describe("Checklist", () => {
       yield* saveCommentRef(path, comment)
       const loaded = yield* loadCommentRef(path)
       assert.strictEqual(loaded?.id, 42)
-      assert.strictEqual(loaded?.owner, "acme")
+      assert.strictEqual(loaded?.project, "acme")
+      assert.strictEqual(loaded?.workItemId, 7)
     })
   )
 

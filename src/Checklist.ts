@@ -4,11 +4,11 @@ import * as Effect from "effect/Effect"
 import * as Ref from "effect/Ref"
 import * as Schema from "effect/Schema"
 import type { FlowEventsShape } from "@llm4ts/flow/FlowEvents"
-import { IssueCommentRef, type GitHubToolShape } from "@llm4ts/flow/GitHubTool"
+import { CommentRef, type HostingShape } from "./Hosting.ts"
 import { formatDuration } from "./Progress.ts"
 import { signature } from "./Protocol.ts"
 
-// The plan lives on the issue as ONE GitHub task-list comment that the
+// The plan lives on the work item as ONE task-list comment that the
 // factory edits as work progresses — a living checklist instead of a
 // scroll of tick comments:
 //   - [x] Expose portfolio suitability violations (5m44s)
@@ -48,11 +48,11 @@ export const renderChecklist = (
     signature
   ].join("\n")
 
-const decodeCommentRef = Schema.decodeUnknownEffect(Schema.fromJsonString(IssueCommentRef))
+const decodeCommentRef = Schema.decodeUnknownEffect(Schema.fromJsonString(CommentRef))
 
 export const saveCommentRef = (
   path: string,
-  comment: IssueCommentRef
+  comment: CommentRef
 ): Effect.Effect<void> =>
   Effect.ignore(
     Effect.tryPromise({
@@ -61,10 +61,10 @@ export const saveCommentRef = (
     })
   )
 
-export const loadCommentRef = (path: string): Effect.Effect<IssueCommentRef | undefined> =>
+export const loadCommentRef = (path: string): Effect.Effect<CommentRef | undefined> =>
   Effect.tryPromise({ try: () => readFile(path, "utf8"), catch: () => "missing" }).pipe(
     Effect.flatMap((content) => decodeCommentRef(content)),
-    Effect.map((comment): IssueCommentRef | undefined => comment),
+    Effect.map((comment): CommentRef | undefined => comment),
     Effect.catch(() => Effect.succeed(undefined))
   )
 
@@ -74,8 +74,8 @@ export const loadCommentRef = (path: string): Effect.Effect<IssueCommentRef | un
 // pass through untouched.
 export const makeChecklistEvents = (
   inner: FlowEventsShape,
-  gh: GitHubToolShape,
-  comment: IssueCommentRef,
+  hosting: HostingShape,
+  comment: CommentRef,
   epicId: string,
   initial: ReadonlyArray<{ readonly title: string; readonly completed: boolean }>
 ): Effect.Effect<FlowEventsShape> =>
@@ -105,7 +105,7 @@ export const makeChecklistEvents = (
       })
     const redraw = Ref.get(tasks).pipe(
       Effect.flatMap((current) =>
-        Effect.ignore(gh.editIssueComment(comment, renderChecklist(epicId, current)))
+        Effect.ignore(hosting.editComment(comment, renderChecklist(epicId, current)))
       )
     )
     const elapsed = (title: string): Effect.Effect<string | undefined> =>
