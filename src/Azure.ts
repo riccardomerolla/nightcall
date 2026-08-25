@@ -172,11 +172,20 @@ export const wiqlFor = (project: ProjectRef, filter: WorkItemFilter): string => 
     ...(filter.tags ?? []).map((tag) => `[System.Tags] CONTAINS ${quoteWiql(tag)}`)
   ]
   const select = workItemFields.map((name) => `[${name}]`).join(", ")
+  // No TOP. WIQL looks like SQL but its grammar is only SELECT / FROM /
+  // WHERE / ORDER BY / ASOF; the row cap is the REST `$top` parameter, and
+  // `az boards query` does not expose it. A `TOP n` leaves the SELECT list
+  // unparseable, so the server never reaches FROM and answers "TF51006: the
+  // query statement is missing a FROM clause". The limit is applied to the
+  // result instead — with the ORDER BY, that is the same rows in the same
+  // order TOP would have given.
   return (
-    `SELECT TOP ${String(filter.limit ?? 200)} ${select} FROM WorkItems ` +
+    `SELECT ${select} FROM WorkItems ` +
     `WHERE ${clauses.join(" AND ")} ORDER BY [System.Id] ASC`
   )
 }
+
+export const defaultWorkItemLimit = 200
 
 export const queryArgs = (
   config: AzureConfig,
@@ -681,7 +690,10 @@ export const makeAzureHosting = (
           // heartbeat's phaseOf pass would drop them, but a caller that
           // trusts this filter directly (boot reconciliation, epic watch)
           // would not — so the exact match happens here, once.
-          Effect.map((items) => items.filter(hasAllTags(filter.tags)))
+          Effect.map((items) => items.filter(hasAllTags(filter.tags))),
+          // After that filter, so a limit counts items the caller will
+          // actually see rather than ones CONTAINS matched by accident.
+          Effect.map((items) => items.slice(0, filter.limit ?? defaultWorkItemLimit))
         )
       ),
     createWorkItem: (project, title, body, tags = []) =>

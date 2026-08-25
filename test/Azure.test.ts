@@ -165,7 +165,6 @@ describe("Azure DevOps argv", () => {
   it("escapes WIQL literals so a tag cannot rewrite the query", () => {
     assert.strictEqual(quoteWiql("won't fix"), "'won''t fix'")
     const wiql = wiqlFor(project, { tags: [Tags.ready], limit: 5 })
-    assert.match(wiql, /SELECT TOP 5 /)
     assert.match(wiql, /\[System\.TeamProject\] = 'acme'/)
     assert.match(wiql, /\[System\.State\] <> 'Closed'/)
     assert.match(wiql, /\[System\.Tags\] CONTAINS 'factory:ready'/)
@@ -173,6 +172,21 @@ describe("Azure DevOps argv", () => {
     // "all" drops the state predicate; System.State stays in the SELECT.
     assert.notMatch(wiqlFor(project, { state: "all" }), /\[System\.State\] (=|<>)/)
     assert.match(wiqlFor(project, { tags: ["a' OR 1=1 --"] }), /'a'' OR 1=1 --'/)
+  })
+
+  it("builds a query WIQL's grammar accepts", () => {
+    // WIQL reads like SQL and is not SQL: SELECT / FROM / WHERE / ORDER BY /
+    // ASOF is the whole language. `SELECT TOP n` — the obvious way to cap
+    // rows — leaves the SELECT list unparseable, so the server never reaches
+    // FROM and rejects the whole query with "TF51006: the query statement is
+    // missing a FROM clause". Every heartbeat ran this query, so the daemon
+    // saw nothing at all.
+    const wiql = wiqlFor(project, { tags: [Tags.ready], limit: 5 })
+
+    assert.notMatch(wiql, /\bTOP\b/i)
+    assert.match(wiql, /^SELECT \[System\.Id\], /)
+    assert.match(wiql, / FROM WorkItems WHERE /)
+    assert.match(wiql, / ORDER BY \[System\.Id\] ASC$/)
   })
 })
 
