@@ -293,12 +293,23 @@ export const runWorkItem = (
     // Where the code lives is a question only the work item can answer: a
     // board spans repositories, so the Development links decide before any
     // path is built.
-    const workspace = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
-    if (workspace === undefined) {
+    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    if (routing._tag === "Undetermined") {
+      // The board did not answer. Bouncing would strip `factory:ready` and
+      // tell the item something false about itself, so give the claim back
+      // and let the next beat ask again.
+      yield* Effect.logWarning(
+        `${intent.target.slug}#${intent.item.id}: cannot route — ${routing.detail}`
+      )
+      yield* Effect.ignore(hosting.editTags(ref, [], [Tags.wip]))
+      return { outcome: "Failed" as const, costUsd: 0 }
+    }
+    if (routing._tag === "Unroutable") {
       yield* Effect.ignore(hosting.editTags(ref, bounce.add, bounce.remove))
-      yield* tell(hosting, ref, unroutableNotice(intent.target))
+      yield* tell(hosting, ref, unroutableNotice(intent.target, routing.links))
       return { outcome: "Bounced" as const, costUsd: 0 }
     }
+    const workspace = routing.workspace
     const stateDir = join(
       workspaceDir,
       "state",

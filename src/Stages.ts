@@ -99,12 +99,22 @@ export const runStage = (
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
     // A board spans repositories, so the Development links decide which one
     // this work item is worked in before any path is built.
-    const workspace = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
-    if (workspace === undefined) {
+    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    if (routing._tag === "Undetermined") {
+      // Not a routing decision — see Workspace.ts. Give the claim back and
+      // leave the item's tags alone so the next beat retries it.
+      yield* Effect.logWarning(
+        `${intent.target.slug}#${intent.item.id}: cannot route — ${routing.detail}`
+      )
+      yield* Effect.ignore(hosting.editTags(ref, [], [Tags.wip]))
+      return { outcome: "Failed" as const, costUsd: 0 }
+    }
+    if (routing._tag === "Unroutable") {
       yield* Effect.ignore(hosting.editTags(ref, bounce.add, bounce.remove))
-      yield* tell(hosting, ref, unroutableNotice(intent.target))
+      yield* tell(hosting, ref, unroutableNotice(intent.target, routing.links))
       return { outcome: "Bounced" as const, costUsd: 0 }
     }
+    const workspace = routing.workspace
     const stateDir = join(
       workspaceDir,
       "state",
@@ -658,11 +668,17 @@ export const runMend = (
   Effect.gen(function* () {
     const ref = intent.item.ref(projectRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
-    const workspace = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
-    if (workspace === undefined) {
+    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    if (routing._tag !== "Routed") {
+      if (routing._tag === "Undetermined") {
+        yield* Effect.logWarning(
+          `${intent.target.slug}#${intent.item.id}: cannot route — ${routing.detail}`
+        )
+      }
       yield* Effect.ignore(hosting.editTags(ref, [], [Tags.wip]))
       return { outcome: "Failed" as const, costUsd: 0 }
     }
+    const workspace = routing.workspace
     const { repoDir, worktree } = workItemPaths(workspaceDir, intent, workspace.repository)
     const branch = workspace.branch
     const gate = environment["NIGHTCALL_GATE"]?.trim()
