@@ -4,7 +4,7 @@ import * as Ref from "effect/Ref"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import type { HostingShape, WorkItemRef, WorkItemSummary } from "./Hosting.ts"
-import { projectRefOf, type CompanyConfig, type TargetRepo } from "./Config.ts"
+import { projectRefOf, type CompanyConfig, type TargetBoard } from "./Config.ts"
 import { watchEpics } from "./EpicWatch.ts"
 import { blockedByRefs } from "./Prompts.ts"
 import { LedgerEntry, appendLedger, readLedger, spentToday } from "./Ledger.ts"
@@ -17,7 +17,7 @@ import { Tags, claim, isEpic, phaseOf, signed, stageClaim } from "./Protocol.ts"
 // tag state plus the durable ledger (for the daily spend throttle).
 
 export interface TargetSnapshot {
-  readonly target: TargetRepo
+  readonly target: TargetBoard
   readonly ready: ReadonlyArray<WorkItemSummary>
   readonly wip: ReadonlyArray<WorkItemSummary>
   readonly planned: ReadonlyArray<WorkItemSummary>
@@ -30,7 +30,7 @@ export interface TargetSnapshot {
 }
 
 export interface ClaimIntent {
-  readonly target: TargetRepo
+  readonly target: TargetBoard
   readonly item: WorkItemSummary
 }
 
@@ -48,7 +48,7 @@ export interface HeartbeatDecision {
 
 export const poll = (
   hosting: HostingShape,
-  targets: ReadonlyArray<TargetRepo>
+  targets: ReadonlyArray<TargetBoard>
 ): Effect.Effect<ReadonlyArray<TargetSnapshot>, FlowError> =>
   Effect.forEach(targets, (target) =>
     Effect.gen(function* () {

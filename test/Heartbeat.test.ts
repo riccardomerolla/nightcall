@@ -17,12 +17,12 @@ import {
   workItemShowArgs,
   type AzureConfig
 } from "../src/Azure.ts"
-import { CompanyConfig, TargetRepo, projectRefOf } from "../src/Config.ts"
+import { CompanyConfig, TargetBoard, projectRefOf } from "../src/Config.ts"
 import { claimComment, decide, heartbeat } from "../src/Heartbeat.ts"
 import { WorkItemSummary } from "../src/Hosting.ts"
 import { Tags } from "../src/Protocol.ts"
 
-const target = TargetRepo.make({ project: "acme", repository: "widgets" })
+const target = TargetBoard.make({ project: "acme", defaultRepository: "widgets" })
 const project = projectRefOf(target)
 
 const azure: AzureConfig = {

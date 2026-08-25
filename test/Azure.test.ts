@@ -9,6 +9,7 @@ import {
 import { makeFakeTemporaryFiles } from "@llm4ts/core/TemporaryFiles"
 import { makeCollectingFlowEvents } from "@llm4ts/flow/FlowEvents"
 import {
+  adoConfigFor,
   branchName,
   cloneUrl,
   commentsArgs,
@@ -29,6 +30,13 @@ import {
   workItemShowArgs,
   type AzureConfig
 } from "../src/Azure.ts"
+import {
+  GitArtifact,
+  artifactUri,
+  relationAddArgs,
+  repositoryShowArgs,
+  workItemShowArgs as relationsShowArgs
+} from "@llm4ts/flow/AzureDevOpsTool"
 import { ProjectRef, WorkItemRef } from "../src/Hosting.ts"
 import { blockedByRefs, epicChildMarker, isEpicChild } from "../src/Prompts.ts"
 import { Tags, signature, signed } from "../src/Protocol.ts"
@@ -398,6 +406,90 @@ describe("Azure DevOps hosting", () => {
       assert.strictEqual(denied._tag, "CapabilityDenied")
       // Denied before transport: the read query is the only call made.
       assert.strictEqual(calls.length, 1)
+    })
+  )
+
+  it.effect("links a branch back to the work item, and only once", () =>
+    Effect.gen(function* () {
+      const ado = adoConfigFor(azure, "acme", "widgets")
+      const artifact = GitArtifact.make({
+        kind: "Branch",
+        projectId: "p-guid",
+        repositoryId: "r-guid",
+        value: "factory/item-7"
+      })
+      const repoJson = JSON.stringify({
+        id: "r-guid",
+        name: "widgets",
+        project: { id: "p-guid", name: "acme" },
+        defaultBranch: "refs/heads/main"
+      })
+      const { fake, hosting } = yield* hostingWith([
+        [processCommandKey(["az", ...repositoryShowArgs(ado, "widgets")]), json(repoJson)],
+        // First read: nothing linked. Second: the link this call just made.
+        [
+          processCommandKey(["az", ...relationsShowArgs(ado, 7, "relations")]),
+          json(JSON.stringify({ id: 7, fields: {} }))
+        ],
+        [processCommandKey(["az", ...relationAddArgs(ado, 7, artifact)]), ok]
+      ])
+
+      yield* hosting.linkBranch(ref, "widgets", "refs/heads/factory/item-7")
+      const calls = yield* fake.recorded
+
+      // The ref arrived as a full ref name and is linked as a short one.
+      assert.isTrue(
+        calls.some((call) => call.argv.includes(artifactUri(artifact))),
+        "the branch artifact URI was never sent"
+      )
+    })
+  )
+
+  it.effect("does not re-add a Development link that is already there", () =>
+    Effect.gen(function* () {
+      const ado = adoConfigFor(azure, "acme", "widgets")
+      const artifact = GitArtifact.make({
+        kind: "PullRequest",
+        projectId: "p-guid",
+        repositoryId: "r-guid",
+        value: "42"
+      })
+      const { fake, hosting } = yield* hostingWith([
+        [
+          processCommandKey(["az", ...repositoryShowArgs(ado, "widgets")]),
+          json(
+            JSON.stringify({
+              id: "r-guid",
+              name: "widgets",
+              project: { id: "p-guid", name: "acme" }
+            })
+          )
+        ],
+        [
+          processCommandKey(["az", ...relationsShowArgs(ado, 7, "relations")]),
+          json(
+            JSON.stringify({
+              id: 7,
+              fields: {},
+              relations: [
+                {
+                  rel: "ArtifactLink",
+                  url: artifactUri(artifact),
+                  attributes: { name: "Pull Request" }
+                }
+              ]
+            })
+          )
+        ]
+      ])
+
+      // Adding a duplicate link is an error from the service, so a resumed
+      // stage must recognise its own earlier work. The fake has no response
+      // for `relation add`, so attempting one would fail this test.
+      yield* hosting.linkPullRequest(ref, "widgets", 42)
+      const calls = yield* fake.recorded
+
+      assert.isTrue(calls.every((call) => !call.argv.includes("--target-url")))
     })
   )
 

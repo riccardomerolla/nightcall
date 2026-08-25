@@ -3,6 +3,16 @@ import * as Schema from "effect/Schema"
 import { Capabilities } from "@llm4ts/core/Capability"
 import type { ProcessExecutorShape, ProcessResult } from "@llm4ts/core/ProcessExecutor"
 import type { TemporaryFilesShape } from "@llm4ts/core/TemporaryFiles"
+import {
+  AdoConfig,
+  GitArtifact,
+  type GitRepository,
+  parseDevelopmentLinks,
+  parseRepository,
+  relationAddArgs,
+  repositoryShowArgs,
+  workItemShowArgs as relationsShowArgs
+} from "@llm4ts/flow/AzureDevOpsTool"
 import { guarded } from "@llm4ts/flow/CapabilityGuard"
 import { ProcessError, type FlowError } from "@llm4ts/flow/FlowError"
 import type { FlowEventsShape } from "@llm4ts/flow/FlowEvents"
@@ -29,9 +39,12 @@ import {
 // trace, or a persisted plan. Git operations on the clone authenticate
 // through the operator's git credential helper for the same reason.
 //
-// Once llm4ts publishes its CLI-backed `@llm4ts/flow/AzureDevOpsTool`
-// (llm4ts PR #11), the argv builders and parsers below can be deleted in
-// favour of it; the port in `Hosting.ts` is what keeps that a local swap.
+// Development-link handling comes from `@llm4ts/flow/AzureDevOpsTool`: the
+// `vstfs:` URI encoding, the relation decoding, and the GUID resolution are
+// Azure DevOps protocol and live there. What stays here is what that tool's
+// single-project config cannot express — the board queries — plus the two
+// things Nightcall needs that it does not offer: the HTML round trip, and
+// comments that come back with an id so a checklist can be edited in place.
 
 export interface AzureConfig {
   // Organization URL, e.g. https://dev.azure.com/acme
@@ -462,6 +475,23 @@ export const outcomeFromPolicies = (payload: string): Effect.Effect<BuildOutcome
     Effect.mapError(decodeFailure("az repos pr policy list"))
   )
 
+// Development-link work is llm4ts's: the `vstfs:` URI encoding, the
+// relation decoding, and the GUID resolution all live in
+// `@llm4ts/flow/AzureDevOpsTool`, which binds one project+repository per
+// config value. Nightcall polls many boards, so it mints that config per
+// call rather than holding one — the value is cheap and immutable.
+export const adoConfigFor = (
+  config: AzureConfig,
+  project: string,
+  repository: string
+): AdoConfig =>
+  AdoConfig.make({
+    orgUrl: config.orgUrl,
+    project,
+    repository,
+    apiVersion: config.apiVersion
+  })
+
 export const hasAllTags =
   (required: ReadonlyArray<string> | undefined) =>
   (item: WorkItemSummary): boolean =>
@@ -539,6 +569,41 @@ export const makeAzureHosting = (
       Effect.flatMap(parseWorkItem),
       Effect.map((item) => item.tags)
     )
+
+  const repositoryOf = (
+    project: string,
+    nameOrId: string
+  ): Effect.Effect<GitRepository, FlowError> =>
+    run(repositoryShowArgs(adoConfigFor(config, project, nameOrId), nameOrId)).pipe(
+      Effect.flatMap(parseRepository)
+    )
+
+  // Adding a link that already exists is an error from the service, so the
+  // Development section is read first. That also makes re-linking on a
+  // resumed stage a no-op instead of a noisy failure.
+  const linkTo = (
+    ref: WorkItemRef,
+    repository: string,
+    artifactOf: (repo: GitRepository) => GitArtifact
+  ): Effect.Effect<void, FlowError> =>
+    Effect.gen(function* () {
+      const repo = yield* repositoryOf(ref.project, repository)
+      const artifact = artifactOf(repo)
+      const existing = yield* run(
+        relationsShowArgs(adoConfigFor(config, ref.project, repository), ref.id, "relations")
+      ).pipe(Effect.flatMap(parseDevelopmentLinks))
+      const already = existing.some(
+        (link) =>
+          link.kind === artifact.kind &&
+          link.repositoryId === artifact.repositoryId &&
+          link.value === artifact.value
+      )
+      if (!already) {
+        yield* run(
+          relationAddArgs(adoConfigFor(config, ref.project, repository), ref.id, artifact)
+        )
+      }
+    })
 
   const findOpenPr = (
     project: ProjectRef,
@@ -668,6 +733,38 @@ export const makeAzureHosting = (
         run(prPolicyArgs(config, pr.id)).pipe(Effect.flatMap(outcomeFromPolicies))
       ),
     mergePr: (pr) =>
-      write("ado mergePr", run(prCompleteArgs(config, pr.id)).pipe(Effect.asVoid))
+      write("ado mergePr", run(prCompleteArgs(config, pr.id)).pipe(Effect.asVoid)),
+    developmentLinks: (ref) =>
+      read(
+        "ado developmentLinks",
+        run(
+          relationsShowArgs(adoConfigFor(config, ref.project, ref.repository), ref.id, "relations")
+        ).pipe(Effect.flatMap(parseDevelopmentLinks))
+      ),
+    linkBranch: (ref, repository, branch) =>
+      write(
+        "ado linkBranch",
+        linkTo(ref, repository, (repo) =>
+          GitArtifact.make({
+            kind: "Branch",
+            projectId: repo.projectId,
+            repositoryId: repo.id,
+            value: branchName(branch)
+          })
+        )
+      ),
+    linkPullRequest: (ref, repository, pullRequestId) =>
+      write(
+        "ado linkPullRequest",
+        linkTo(ref, repository, (repo) =>
+          GitArtifact.make({
+            kind: "PullRequest",
+            projectId: repo.projectId,
+            repositoryId: repo.id,
+            value: String(pullRequestId)
+          })
+        )
+      ),
+    repository: (project, nameOrId) => read("ado repository", repositoryOf(project, nameOrId))
   }
 }

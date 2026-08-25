@@ -3,21 +3,38 @@ import * as Effect from "effect/Effect"
 import { azureFromEnv, configFromEnv, parseTarget } from "../src/Config.ts"
 
 describe("Config", () => {
-  it("parses project/repository slugs", () => {
+  it("parses a board with or without a default repository", () => {
     assert.strictEqual(parseTarget("acme/widgets")?.slug, "acme/widgets")
-    assert.isUndefined(parseTarget("not-a-slug"))
+    assert.strictEqual(parseTarget("acme/widgets")?.defaultRepository, "widgets")
+    // A bare project is a board whose work routes itself by Development link.
+    assert.strictEqual(parseTarget("acme")?.project, "acme")
+    assert.strictEqual(parseTarget("acme")?.defaultRepository, "")
+    assert.strictEqual(parseTarget("acme")?.slug, "acme")
     assert.isUndefined(parseTarget("a/b/c"))
+    assert.isUndefined(parseTarget(""))
   })
+
+  it.effect("refuses to poll one board twice", () =>
+    Effect.gen(function* () {
+      // Two entries for one project would claim every work item twice, in
+      // two different repositories.
+      const duplicate = yield* Effect.flip(
+        configFromEnv({ NIGHTCALL_TARGETS: "acme/widgets, acme/gears" })
+      )
+      assert.include(duplicate.message, "twice")
+      assert.include(duplicate.message, "Development")
+    })
+  )
 
   it.effect("applies DESIGN.md defaults and env overrides", () =>
     Effect.gen(function* () {
       const config = yield* configFromEnv({
-        NIGHTCALL_TARGETS: "acme/widgets, acme/gears",
+        NIGHTCALL_TARGETS: "acme/widgets, gizmo/gears",
         NIGHTCALL_ISSUE_BUDGET_USD: "10"
       })
       assert.deepStrictEqual(
         config.targets.map((target) => target.slug),
-        ["acme/widgets", "acme/gears"]
+        ["acme/widgets", "gizmo/gears"]
       )
       assert.strictEqual(config.heartbeatSeconds, 120)
       assert.strictEqual(config.issueBudgetUsd, 10)
@@ -57,11 +74,12 @@ describe("Config", () => {
         NIGHTCALL_HEARTBEAT_SECONDS: "-5"
       })
       const missing = yield* Effect.flip(configFromEnv({}))
-      const malformed = yield* Effect.flip(configFromEnv({ NIGHTCALL_TARGETS: "oops" }))
+      // A bare project is a valid board now; three segments never are.
+      const malformed = yield* Effect.flip(configFromEnv({ NIGHTCALL_TARGETS: "a/b/c" }))
 
       assert.strictEqual(config.heartbeatSeconds, 120)
       assert.strictEqual(missing._tag, "ConfigError")
-      assert.include(malformed.message, "oops")
+      assert.include(malformed.message, "a/b/c")
     })
   )
 })

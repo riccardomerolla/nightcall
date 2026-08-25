@@ -9,12 +9,20 @@ import { ProjectRef } from "./Hosting.ts"
 // which `az` reads for itself), and git authenticates the clone through the
 // operator's credential helper.
 
-export class TargetRepo extends Schema.Class<TargetRepo>("TargetRepo")({
+// A target is a BOARD, not a repository. Azure DevOps work items belong to
+// a project; a project holds many repositories, and which one a given work
+// item is worked in comes from its Development links (see Workspace.ts).
+// `defaultRepository` is the fallback for work items that carry no link —
+// empty means "a work item without a Development link is not actionable
+// here", which is the right answer for a board spanning many repos.
+export class TargetBoard extends Schema.Class<TargetBoard>("TargetBoard")({
   project: Schema.String,
-  repository: Schema.String
+  defaultRepository: Schema.String
 }) {
   get slug(): string {
-    return `${this.project}/${this.repository}`
+    return this.defaultRepository.length === 0
+      ? this.project
+      : `${this.project}/${this.defaultRepository}`
   }
 }
 
@@ -26,7 +34,7 @@ export class ConfigError extends Schema.TaggedErrorClass<ConfigError>("nightcall
 ) {}
 
 export class CompanyConfig extends Schema.Class<CompanyConfig>("CompanyConfig")({
-  targets: Schema.Array(TargetRepo),
+  targets: Schema.Array(TargetBoard),
   heartbeatSeconds: Schema.Int,
   issueBudgetUsd: Schema.Number,
   dailyBudgetUsd: Schema.Number,
@@ -34,17 +42,24 @@ export class CompanyConfig extends Schema.Class<CompanyConfig>("CompanyConfig")(
   engineerParallelism: Schema.Int
 }) {}
 
-export const parseTarget = (input: string): TargetRepo | undefined => {
-  const match = /^([^/\s]+)\/([^/\s]+)$/.exec(input.trim())
-  const project = match?.[1]
-  const repository = match?.[2]
-  return project === undefined || repository === undefined
-    ? undefined
-    : TargetRepo.make({ project, repository })
+// `project/repository` names a board plus its default repository;
+// a bare `project` names a board whose work must route itself.
+export const parseTarget = (input: string): TargetBoard | undefined => {
+  const trimmed = input.trim()
+  const pair = /^([^/\s]+)\/([^/\s]+)$/.exec(trimmed)
+  if (pair?.[1] !== undefined && pair[2] !== undefined) {
+    return TargetBoard.make({ project: pair[1], defaultRepository: pair[2] })
+  }
+  return /^[^/\s]+$/.test(trimmed)
+    ? TargetBoard.make({ project: trimmed, defaultRepository: "" })
+    : undefined
 }
 
-export const projectRefOf = (target: TargetRepo): ProjectRef =>
-  ProjectRef.make({ project: target.project, repository: target.repository })
+export const projectRefOf = (target: TargetBoard, repository?: string): ProjectRef =>
+  ProjectRef.make({
+    project: target.project,
+    repository: repository ?? target.defaultRepository
+  })
 
 const positiveOr = (raw: string | undefined, fallback: number): number => {
   const parsed = raw === undefined ? Number.NaN : Number(raw)
@@ -95,13 +110,26 @@ export const configFromEnv = (
       new ConfigError({ message: "NIGHTCALL_TARGETS must list at least one project/repository" })
     )
   }
-  const targets: Array<TargetRepo> = []
+  const targets: Array<TargetBoard> = []
   for (const raw of rawTargets) {
     const target = parseTarget(raw)
     if (target === undefined) {
       return Effect.fail(
         new ConfigError({
-          message: `NIGHTCALL_TARGETS entry is not project/repository: ${raw}`
+          message: `NIGHTCALL_TARGETS entry is not project or project/repository: ${raw}`
+        })
+      )
+    }
+    // Two entries for one project would poll the same board twice and claim
+    // every work item twice, in two different repositories. A board is
+    // polled once; Development links route its work to repositories.
+    if (targets.some((existing) => existing.project === target.project)) {
+      return Effect.fail(
+        new ConfigError({
+          message:
+            `NIGHTCALL_TARGETS lists project ${target.project} twice. A board is ` +
+            "polled once — list it once and let each work item's Development " +
+            "link choose its repository."
         })
       )
     }

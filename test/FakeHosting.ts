@@ -15,5 +15,9 @@ export const stubHosting = (overrides: Partial<HostingShape> = {}): HostingShape
   createPr: () => Effect.die("createPr: unused"),
   prChecks: () => Effect.die("prChecks: unused"),
   mergePr: () => Effect.die("mergePr: unused"),
+  developmentLinks: () => Effect.die("developmentLinks: unused"),
+  linkBranch: () => Effect.die("linkBranch: unused"),
+  linkPullRequest: () => Effect.die("linkPullRequest: unused"),
+  repository: () => Effect.die("repository: unused"),
   ...overrides
 })

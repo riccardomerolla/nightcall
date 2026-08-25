@@ -28,6 +28,7 @@ import { parseVerbosity } from "@llm4ts/runner/Terminal"
 import { timestampedSurface } from "./Surface.ts"
 import { cloneUrl, type AzureConfig } from "./Azure.ts"
 import type { HostingShape, WorkItemRef } from "./Hosting.ts"
+import { resolveWorkspace, unroutableNotice, type Workspace } from "./Workspace.ts"
 import { projectRefOf, type CompanyConfig } from "./Config.ts"
 import type { ClaimIntent } from "./Heartbeat.ts"
 import { makeProgressEvents } from "./Progress.ts"
@@ -47,7 +48,6 @@ import {
   attemptTag,
   attemptOf,
   bounce,
-  branchFor,
   budgetOverrideUsd,
   fail,
   isFresh,
@@ -141,11 +141,15 @@ const exists = (path: string): Effect.Effect<boolean> =>
     Effect.catch(() => Effect.succeed(false))
   )
 
+// Keyed by the RESOLVED repository, not by the board: two work items on
+// one board can live in two different repositories, so a per-board clone
+// would check out the wrong code for one of them.
 export const workItemPaths = (
   workspaceDir: string,
-  intent: ClaimIntent
+  intent: ClaimIntent,
+  repository: string
 ): { readonly repoDir: string; readonly worktree: string } => {
-  const slugDir = `${intent.target.project}__${intent.target.repository}`
+  const slugDir = `${intent.target.project}__${repository}`
   return {
     repoDir: join(workspaceDir, "repos", slugDir),
     worktree: join(workspaceDir, "worktrees", slugDir, `item-${intent.item.id}`)
@@ -153,17 +157,21 @@ export const workItemPaths = (
 }
 
 // factory:fresh — discard every trace of prior attempts so the run starts
-// from a brand-new branch off origin/HEAD: worktree, persisted plan, and
-// the branch locally and on the remote. All best-effort: a partially
-// applied reset still proceeds (worktree add -B re-points the branch).
+// clean: worktree, persisted plan, and the branch locally and on the
+// remote. All best-effort: a partially applied reset still proceeds
+// (worktree add -B re-points the branch).
+//
+// A branch that came from a Development link is NOT deleted. A human
+// created it and pointed the work item at it; discarding a factory attempt
+// must never destroy the branch the CEO designated.
 export const resetWorkItemState = (
   workspaceDir: string,
   intent: ClaimIntent,
+  workspace: Workspace,
   planPath: string
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const { repoDir, worktree } = workItemPaths(workspaceDir, intent)
-    const branch = branchFor(intent.item.id)
+    const { repoDir, worktree } = workItemPaths(workspaceDir, intent, workspace.repository)
     yield* Effect.ignore(
       Effect.tryPromise({
         try: () => rm(worktree, { recursive: true, force: true }),
@@ -171,10 +179,14 @@ export const resetWorkItemState = (
       })
     )
     yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
-    yield* Effect.ignore(run(["git", "-C", repoDir, "branch", "-D", branch], workspaceDir))
-    yield* Effect.ignore(
-      run(["git", "-C", repoDir, "push", "origin", "--delete", branch], workspaceDir)
-    )
+    if (!workspace.linked) {
+      yield* Effect.ignore(
+        run(["git", "-C", repoDir, "branch", "-D", workspace.branch], workspaceDir)
+      )
+      yield* Effect.ignore(
+        run(["git", "-C", repoDir, "push", "origin", "--delete", workspace.branch], workspaceDir)
+      )
+    }
     yield* Effect.ignore(
       Effect.tryPromise({ try: () => rm(planPath, { force: true }), catch: (error) => String(error) })
     )
@@ -192,37 +204,45 @@ export const ensureWorktree = (
   workspaceDir: string,
   azure: AzureConfig,
   intent: ClaimIntent,
+  workspace: Workspace,
   lock?: Semaphore.Semaphore
 ): Effect.Effect<string, FlowError> => {
   const setup = Effect.gen(function* () {
-    const { repoDir, worktree } = workItemPaths(workspaceDir, intent)
+    const { repoDir, worktree } = workItemPaths(workspaceDir, intent, workspace.repository)
     yield* Effect.tryPromise({
       try: () => mkdir(join(workspaceDir, "repos"), { recursive: true }),
       catch: (error) => ProcessError.make({ message: "mkdir", detail: String(error) })
     })
     if (!(yield* exists(repoDir))) {
       yield* run(
-        ["git", "clone", cloneUrl(azure, projectRefOf(intent.target)), repoDir],
+        [
+          "git",
+          "clone",
+          cloneUrl(azure, projectRefOf(intent.target, workspace.repository)),
+          repoDir
+        ],
         workspaceDir
       )
     }
     yield* run(["git", "-C", repoDir, "fetch", "origin", "--prune"], workspaceDir)
     if (!(yield* exists(worktree))) {
-      // Branch from origin/HEAD, not the clone's local HEAD: fetch never
-      // moves local main, so an implicit start point would base new work
-      // on however stale the clone happens to be.
+      // A linked branch already exists on the remote and IS the work; a
+      // fresh one starts at origin/HEAD, not the clone's local HEAD, because
+      // fetch never moves local main and an implicit start point would base
+      // new work on however stale the clone happens to be.
+      const remote = `origin/${workspace.branch}`
+      const startPoint =
+        workspace.linked &&
+        (yield* Effect.orElseSucceed(
+          run(["git", "-C", repoDir, "rev-parse", "--verify", remote], workspaceDir).pipe(
+            Effect.as(true)
+          ),
+          () => false
+        ))
+          ? remote
+          : "origin/HEAD"
       yield* run(
-        [
-          "git",
-          "-C",
-          repoDir,
-          "worktree",
-          "add",
-          "-B",
-          branchFor(intent.item.id),
-          worktree,
-          "origin/HEAD"
-        ],
+        ["git", "-C", repoDir, "worktree", "add", "-B", workspace.branch, worktree, startPoint],
         workspaceDir
       )
     }
@@ -270,10 +290,19 @@ export const runWorkItem = (
     // whole tree, and run-state (prompts, tool output) must never land in
     // the target repo's history. State survives worktree deletion, which
     // also makes resume more robust.
+    // Where the code lives is a question only the work item can answer: a
+    // board spans repositories, so the Development links decide before any
+    // path is built.
+    const workspace = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    if (workspace === undefined) {
+      yield* Effect.ignore(hosting.editTags(ref, bounce.add, bounce.remove))
+      yield* tell(hosting, ref, unroutableNotice(intent.target))
+      return { outcome: "Bounced" as const, costUsd: 0 }
+    }
     const stateDir = join(
       workspaceDir,
       "state",
-      `${intent.target.project}__${intent.target.repository}`
+      `${intent.target.project}__${workspace.repository}`
     )
     yield* Effect.tryPromise({
       try: () => mkdir(stateDir, { recursive: true }),
@@ -282,15 +311,21 @@ export const runWorkItem = (
     const planPath = join(stateDir, `item-${intent.item.id}-plan.md`)
 
     if (isFresh(intent.item.tags)) {
-      yield* resetWorkItemState(workspaceDir, intent, planPath)
+      yield* resetWorkItemState(workspaceDir, intent, workspace, planPath)
       yield* Effect.ignore(hosting.editTags(ref, [], [Tags.fresh]))
-      yield* tell(hosting, ref, "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded.")
+      yield* tell(
+        hosting,
+        ref,
+        workspace.linked
+          ? `Starting from scratch as requested (factory:fresh): worktree and plan discarded. Branch \`${workspace.branch}\` was linked by a human and has been left alone.`
+          : "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded."
+      )
     }
 
-    const worktree = yield* ensureWorktree(workspaceDir, azure, intent)
+    const worktree = yield* ensureWorktree(workspaceDir, azure, intent, workspace)
     const handbook = yield* readHandbook(process.cwd())
     const budgetUsd = budgetOverrideUsd(intent.item.tags) ?? config.issueBudgetUsd
-    const branch = branchFor(intent.item.id)
+    const branch = workspace.branch
     const gate = environment["NIGHTCALL_GATE"]?.trim()
 
     const startedAtMs = yield* Clock.currentTimeMillis
@@ -435,6 +470,13 @@ export const runWorkItem = (
         }
         yield* Ref.set(qaSummary, verdict.summary)
         yield* context.git.push("origin", branch)
+        // The branch now exists on the remote, so it can be linked. A branch
+        // a human already linked is left alone — the link is why we are on
+        // it. Best-effort: a board that will not take the link must not sink
+        // a shipped change.
+        if (!workspace.linked) {
+          yield* Effect.ignore(hosting.linkBranch(ref, workspace.repository, branch))
+        }
         yield* Ref.set(outcome, "Shipped")
       })
 
@@ -521,7 +563,7 @@ export const runWorkItem = (
       yield* Effect.ignore(
         Effect.gen(function* () {
           const pr = yield* hosting.createPr(
-            projectRefOf(intent.target),
+            projectRefOf(intent.target, workspace.repository),
             branch,
             intent.item.id,
             intent.item.title,
@@ -533,6 +575,10 @@ export const runWorkItem = (
               invoice
             })
           )
+          // `az repos pr create --work-items` links a PR it creates; this
+          // also covers the branch that already had one, and is a no-op when
+          // the link is already there.
+          yield* Effect.ignore(hosting.linkPullRequest(ref, workspace.repository, pr.id))
           yield* events.publish(Info.make({ message: `opened ${pr.url}` }))
         })
       )

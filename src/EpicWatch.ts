@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import type { HostingShape, WorkItemSummary } from "./Hosting.ts"
-import { projectRefOf, type TargetRepo } from "./Config.ts"
+import { projectRefOf, type TargetBoard } from "./Config.ts"
 import { epicChildMarker } from "./Prompts.ts"
 import { Tags, signed } from "./Protocol.ts"
 
@@ -34,7 +34,7 @@ export const epicChildrenStatus = (
 
 export const watchEpics = (
   hosting: HostingShape,
-  targets: ReadonlyArray<TargetRepo>,
+  targets: ReadonlyArray<TargetBoard>,
   events: FlowEventsShape
 ): Effect.Effect<void, FlowError> =>
   Effect.forEach(targets, (target) =>

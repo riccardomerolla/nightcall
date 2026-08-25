@@ -4,10 +4,12 @@ A dark software house: a single Effect-TS daemon that runs a virtual AI
 company against Azure DevOps repositories, built entirely on published
 [`@llm4ts/*`](https://github.com/riccardomerolla/llm4ts) packages.
 
-Azure DevOps is the whole control plane — **work items** are the channel
-between the human CEO/CTO and the company, **tags** are the task state
-machine, **pull requests** are the deliverable, git is the audit log. Every
-call is the `az` CLI; every coding seat is the **Gemini CLI**.
+Azure DevOps is the whole control plane — a **project board** carries the
+work items that are the channel between the human CEO/CTO and the company,
+**tags** are the task state machine, **Development links** say which
+repository and branch a work item belongs to, **pull requests** are the
+deliverable, git is the audit log. Every call is the `az` CLI; every coding
+seat is the **Gemini CLI**.
 
 This is the Azure DevOps + Gemini branch of Nightcall. The GitHub + Claude
 original is on `main`; the two differ only in their backend, because the
@@ -41,6 +43,12 @@ NIGHTCALL_TARGETS=project/repository \
 pnpm start
 ```
 
+A target is a **board**, not a repository. `project/repository` names a
+board plus the repository to use for work items that do not say otherwise;
+a bare `project` names a board whose every work item must route itself
+through a Development link. Listing one project twice is a startup error —
+a board is polled once, and its work items choose their own repositories.
+
 Observe mode is the default: the daemon polls `factory:ready` /
 `factory:wip` and logs what it would claim, writing nothing. Arm the full
 pipeline (claim → Tech Lead triage → Engineer → QA → PR) with
@@ -49,7 +57,7 @@ pipeline (claim → Tech Lead triage → Engineer → QA → PR) with
 | Variable                        | Default              | Meaning                                                                                       |
 | ------------------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
 | `NIGHTCALL_ADO_ORG`             | (required)           | organization URL, e.g. `https://dev.azure.com/acme`                                             |
-| `NIGHTCALL_TARGETS`             | (required)           | comma-separated `project/repository` list                                                       |
+| `NIGHTCALL_TARGETS`             | (required)           | comma-separated boards: `project/default-repository`, or bare `project`                         |
 | `NIGHTCALL_ADO_WORK_ITEM_TYPE`  | `Task`               | type created for epic children (`User Story`, `Product Backlog Item`, …)                        |
 | `NIGHTCALL_ADO_TARGET_BRANCH`   | `main`               | pull-request target branch                                                                      |
 | `NIGHTCALL_ADO_API_VERSION`     | `7.1-preview.3`      | API version for the work-item comments resource                                                 |
@@ -84,6 +92,30 @@ holds a work item at a time.
 `factory:needs-info` and `factory:failed` as the exits. Full table in
 [DESIGN.md](DESIGN.md).
 
+## Where a work item's code lives
+
+On GitHub the question does not arise: an issue belongs to a repository.
+An Azure DevOps work item belongs to a **project board**, and a project
+holds many repositories — so before doing anything, the factory asks the
+work item where its code is:
+
+1. **A Branch development link** — that repository, that branch. A human
+   who created a branch from the work item has already decided where this
+   work goes; the factory commits on that branch and opens the PR from it.
+   It is never deleted or force-reset by `factory:fresh`, because the
+   factory did not create it.
+2. **The board's default repository** — a fresh `factory/item-<n>` off
+   `origin/HEAD`, which is then **linked back** to the work item so the
+   board's Development section shows the work.
+3. **Neither** — the work item is not actionable. It goes to
+   `factory:needs-info` with a comment explaining the two ways to fix it.
+
+Nightcall links back at the moments the flow produces something linkable:
+the **branch** the first time it reaches the remote (code stage, or QA in
+the mono pipeline), and the **pull request** when it is opened. Both are
+no-ops when the link already exists, so a resumed stage does not duplicate
+them.
+
 ## Differences that come from the backend
 
 - **Bodies and comments are HTML.** Work item descriptions and discussion
@@ -97,7 +129,12 @@ holds a work item at a time.
   queued/running is Pending, rejected/broken is Failure, and no configured
   policy is Success (there is nothing to fail).
 - **No `az repos clone`.** The clone is a plain `git clone` of the HTTPS
-  remote, authenticated by git's credential helper.
+  remote, authenticated by git's credential helper. Clones and worktrees
+  are keyed by the *resolved* repository, so one board can drive work in
+  several repositories at once.
+- **Artifact links address GUIDs.** A Development link names its project
+  and repository by id, so reading one back costs an `az repos show` to
+  recover the name.
 
 ## Development
 
@@ -124,8 +161,11 @@ Deferred until the trust bar (three work items end-to-end unattended on a
 sandbox project): ledger publication on an orphan branch, Mermaid standup
 dashboard, machine-account identity.
 
-The `az` argv builders and JSON parsers in `src/Azure.ts` are deliberately
-shaped like llm4ts's own forge tools. Once llm4ts publishes its CLI-backed
-`@llm4ts/flow/AzureDevOpsTool` ([llm4ts PR #11](https://github.com/riccardomerolla/llm4ts/pull/11)),
-they can be deleted in favour of it — the port in `src/Hosting.ts` is what
-keeps that a local swap.
+Development-link handling — the `vstfs:` URI encoding, relation decoding,
+and GUID resolution — comes from `@llm4ts/flow/AzureDevOpsTool` (0.13.0).
+The remaining `az` argv builders and JSON parsers in `src/Azure.ts` are
+the ones whose shape differs from that tool's single-project config: the
+board queries, the HTML round trip, and the comment operations that need
+real comment ids. They are deliberately shaped like llm4ts's own so the
+rest can follow later — the port in `src/Hosting.ts` is what keeps that a
+local swap.

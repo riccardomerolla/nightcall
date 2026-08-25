@@ -41,6 +41,7 @@ import {
 } from "./Engineer.ts"
 import type { ClaimIntent, Stage, WorkerReport } from "./Heartbeat.ts"
 import { projectRefOf, type CompanyConfig } from "./Config.ts"
+import { resolveWorkspace, unroutableNotice } from "./Workspace.ts"
 import { loadCommentRef, makeChecklistEvents, renderChecklist, saveCommentRef } from "./Checklist.ts"
 import { makeProgressEvents } from "./Progress.ts"
 import {
@@ -60,7 +61,6 @@ import {
   attemptTag,
   attemptOf,
   bounce,
-  branchFor,
   budgetOverrideUsd,
   doneCode,
   donePlan,
@@ -97,7 +97,19 @@ export const runStage = (
   Effect.gen(function* () {
     const ref = intent.item.ref(projectRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
-    const stateDir = join(workspaceDir, "state", `${intent.target.project}__${intent.target.repository}`)
+    // A board spans repositories, so the Development links decide which one
+    // this work item is worked in before any path is built.
+    const workspace = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    if (workspace === undefined) {
+      yield* Effect.ignore(hosting.editTags(ref, bounce.add, bounce.remove))
+      yield* tell(hosting, ref, unroutableNotice(intent.target))
+      return { outcome: "Bounced" as const, costUsd: 0 }
+    }
+    const stateDir = join(
+      workspaceDir,
+      "state",
+      `${intent.target.project}__${workspace.repository}`
+    )
     yield* Effect.tryPromise({
       try: () => mkdir(stateDir, { recursive: true }),
       catch: (error) => ProcessError.make({ message: "mkdir state", detail: String(error) })
@@ -106,7 +118,7 @@ export const runStage = (
     const planCommentPath = join(stateDir, `item-${intent.item.id}-plan-comment.json`)
 
     if (stage === "plan" && isFresh(intent.item.tags)) {
-      yield* resetWorkItemState(workspaceDir, intent, planPath)
+      yield* resetWorkItemState(workspaceDir, intent, workspace, planPath)
       yield* Effect.ignore(hosting.editTags(ref, [], [Tags.fresh]))
       yield* tell(
         hosting,
@@ -115,10 +127,10 @@ export const runStage = (
       )
     }
 
-    const worktree = yield* ensureWorktree(workspaceDir, azure, intent, gitLock)
+    const worktree = yield* ensureWorktree(workspaceDir, azure, intent, workspace, gitLock)
     const handbook = yield* readHandbook(process.cwd())
     const budgetUsd = budgetOverrideUsd(intent.item.tags) ?? config.issueBudgetUsd
-    const branch = branchFor(intent.item.id)
+    const branch = workspace.branch
     const gate = environment["NIGHTCALL_GATE"]?.trim()
     const turnLimit = positiveIntOr(environment["NIGHTCALL_TURN_LIMIT"], 50)
     const maxRounds = positiveIntOr(environment["NIGHTCALL_MAX_ROUNDS"], 1)
@@ -303,6 +315,11 @@ export const runStage = (
           }
         )
         yield* context.git.push("origin", branch)
+        // The branch exists on the remote from this point on, so the board
+        // can show it. A human-linked branch already has its link.
+        if (!workspace.linked) {
+          yield* Effect.ignore(hosting.linkBranch(ref, workspace.repository, branch))
+        }
         yield* hosting.editTags(ref, doneCode.add, doneCode.remove)
         yield* Ref.set(outcome, "Advanced")
       })
@@ -585,7 +602,7 @@ export const runStage = (
       yield* Effect.ignore(
         Effect.gen(function* () {
           const pr = yield* hosting.createPr(
-            projectRefOf(intent.target),
+            projectRefOf(intent.target, workspace.repository),
             branch,
             intent.item.id,
             intent.item.title,
@@ -597,6 +614,10 @@ export const runStage = (
               invoice
             })
           )
+          // `az repos pr create --work-items` links a PR it creates; this
+          // also covers a branch that already had one, and is a no-op when
+          // the link is already there.
+          yield* Effect.ignore(hosting.linkPullRequest(ref, workspace.repository, pr.id))
           yield* events.publish(Info.make({ message: `opened ${pr.url}` }))
         })
       )
@@ -635,8 +656,13 @@ export const runMend = (
   Effect.gen(function* () {
     const ref = intent.item.ref(projectRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
-    const { repoDir, worktree } = workItemPaths(workspaceDir, intent)
-    const branch = branchFor(intent.item.id)
+    const workspace = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    if (workspace === undefined) {
+      yield* Effect.ignore(hosting.editTags(ref, [], [Tags.wip]))
+      return { outcome: "Failed" as const, costUsd: 0 }
+    }
+    const { repoDir, worktree } = workItemPaths(workspaceDir, intent, workspace.repository)
+    const branch = workspace.branch
     const gate = environment["NIGHTCALL_GATE"]?.trim()
     const unclaim = Effect.ignore(hosting.editTags(ref, [], [Tags.wip]))
     const attempt = (effect: Effect.Effect<string, FlowError>): Effect.Effect<boolean> =>
@@ -697,7 +723,7 @@ export const runMend = (
         ? Effect.succeed(false)
         : Effect.gen(function* () {
             const pr = yield* hosting
-              .openPr(projectRefOf(intent.target), branch)
+              .openPr(projectRefOf(intent.target, workspace.repository), branch)
               .pipe(Effect.orElseSucceed(() => undefined))
             if (pr === undefined) {
               return false

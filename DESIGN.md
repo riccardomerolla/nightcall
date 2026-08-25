@@ -24,13 +24,23 @@ this document through this mapping:
 | issue           | work item                                            |
 | label           | tag (one semicolon-joined `System.Tags` field)       |
 | `gh` CLI        | `az` CLI (+ the `azure-devops` extension)            |
-| `owner/repo`    | `project/repository` inside one organization         |
+| `owner/repo`    | a project **board** + a default repository            |
 | `Closes #N`     | `az repos pr create --work-items N` (a real link)    |
 | PR checks       | branch policy evaluations                            |
 | Claude CLI      | Gemini CLI (`LLM4TS_CODER` still overrides)          |
 | `factory/issue-<n>` | `factory/item-<n>`                               |
 
-Two consequences worth stating plainly, because they are not cosmetic:
+Three consequences worth stating plainly, because they are not cosmetic:
+
+- **A work item has no repository.** It belongs to a project board, and a
+  project holds many repositories. Which repository (and often which
+  branch) a work item is worked in comes from its **Development links**,
+  resolved per item in `src/Workspace.ts`; the board's default repository
+  is the fallback, and a board with neither is told so rather than guessed
+  at. A branch a human linked is worked on directly and is never deleted
+  by `factory:fresh` — the factory did not create it. Nightcall links the
+  branch and the pull request back as the flow produces them, so the
+  board's Development section is the record.
 
 - **Descriptions and comments are HTML on Azure DevOps.** The protocol's
   markers (`Blocked-by: #12`, `Parent: #7 (epic)`, the report signature)

@@ -1,6 +1,9 @@
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
+import type { GitArtifact, GitRepository } from "@llm4ts/flow/AzureDevOpsTool"
 import type { FlowError } from "@llm4ts/flow/FlowError"
+
+export type { GitArtifact, GitRepository }
 
 // The control-plane port. Nightcall's org chart, protocol, and pipeline
 // speak only this interface; `Azure.ts` is the one module that knows the
@@ -131,4 +134,26 @@ export interface HostingShape {
   ) => Effect.Effect<PullRef, FlowError>
   readonly prChecks: (pr: PullRef) => Effect.Effect<BuildOutcome, FlowError>
   readonly mergePr: (pr: PullRef) => Effect.Effect<void, FlowError>
+  // The work item's Development section. This is the Azure DevOps answer to
+  // a question GitHub answers for free: a work item lives on a project
+  // board, not in a repository, so the branch it belongs to is a link on
+  // the item rather than a property of where it lives.
+  readonly developmentLinks: (
+    ref: WorkItemRef
+  ) => Effect.Effect<ReadonlyArray<GitArtifact>, FlowError>
+  readonly linkBranch: (
+    ref: WorkItemRef,
+    repository: string,
+    branch: string
+  ) => Effect.Effect<void, FlowError>
+  readonly linkPullRequest: (
+    ref: WorkItemRef,
+    repository: string,
+    pullRequestId: number
+  ) => Effect.Effect<void, FlowError>
+  // Resolves a repository by name OR by the GUID a Development link carries.
+  readonly repository: (
+    project: string,
+    nameOrId: string
+  ) => Effect.Effect<GitRepository, FlowError>
 }
