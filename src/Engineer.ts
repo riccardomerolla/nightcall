@@ -308,7 +308,26 @@ export const ensureWorktree = (
             ? `origin/${base}`
             : "origin/HEAD"
       yield* run(
-        ["git", "-C", repoDir, "worktree", "add", "-B", workspace.branch, worktree, startPoint],
+        [
+          "git",
+          "-C",
+          repoDir,
+          "worktree",
+          "add",
+          // The safeguard `--force` overrides is "this branch is already
+          // checked out by another working tree", which is the failure
+          // itself. Pruning and releasing the holder above is the tidy
+          // path; this is the one that cannot be defeated by a
+          // registration git will not let go of. Two worktrees on one
+          // branch is not a risk here — the branch is named for the work
+          // item, the git lock serializes setup, and anything else holding
+          // it is that item's own leftover.
+          "--force",
+          "-B",
+          workspace.branch,
+          worktree,
+          startPoint
+        ],
         workspaceDir
       )
     }

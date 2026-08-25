@@ -742,7 +742,21 @@ export const runMend = (
           yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
           return yield* attempt(
             run(
-              ["git", "-C", repoDir, "worktree", "add", "-B", branch, worktree, `origin/${branch}`],
+              [
+                "git",
+                "-C",
+                repoDir,
+                "worktree",
+                "add",
+                // See ensureWorktree: --force overrides exactly the
+                // "already used by worktree" refusal a stale registration
+                // causes.
+                "--force",
+                "-B",
+                branch,
+                worktree,
+                `origin/${branch}`
+              ],
               workspaceDir
             )
           )
