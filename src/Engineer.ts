@@ -293,7 +293,7 @@ export const runWorkItem = (
     // Where the code lives is a question only the work item can answer: a
     // board spans repositories, so the Development links decide before any
     // path is built.
-    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item)
     if (routing._tag === "Undetermined") {
       // The board did not answer. Bouncing would strip `factory:ready` and
       // tell the item something false about itself, so give the claim back

@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect"
 import type { TargetBoard } from "./Config.ts"
-import type { GitArtifact, HostingShape, WorkItemRef } from "./Hosting.ts"
+import { WorkItemRef, type GitArtifact, type HostingShape } from "./Hosting.ts"
+import { epicParentOf } from "./Prompts.ts"
 import { branchFor } from "./Protocol.ts"
 import { describeError } from "./Surface.ts"
 
@@ -16,9 +17,20 @@ import { describeError } from "./Surface.ts"
 //
 // Resolution, in order:
 //   1. A Branch development link — that repository, that branch, as-is.
-//   2. The board's default repository — a fresh `factory/item-N` off
+//   2. The PARENT epic's Branch link — that repository, on the child's own
+//      `factory/item-N`. A decomposed child has no Development link of its
+//      own: the human linked the epic, and the children are how that epic
+//      gets built, so they belong in the repository the epic names. On a
+//      board with no default repository this is the difference between a
+//      decomposition that works and five children that are all unroutable.
+//   3. The board's default repository — a fresh `factory/item-N` off
 //      origin/HEAD, which is then linked BACK so the board shows the work.
-//   3. Neither — the item is not actionable here and says so.
+//   4. Neither — the item is not actionable here and says so.
+//
+// The repository is inherited; the branch is NOT. Handing every child the
+// epic's branch would put five concurrent engineers on one branch, opening
+// five pull requests from the same source ref — which Azure DevOps answers
+// by giving them all the same pull request.
 //
 // A fourth answer has to exist and did not: "the board would not tell us".
 // A failed lookup used to collapse into case 2 or 3, so a work item with a
@@ -59,13 +71,67 @@ const attempt = <A>(
     Effect.catch((error) => Effect.succeed({ failure: describeError(error) }))
   )
 
+type ParentRepository =
+  | { readonly _tag: "None" }
+  | { readonly _tag: "Repository"; readonly repository: string }
+  | { readonly _tag: "Undetermined"; readonly detail: string }
+
+// The repository the item's parent epic is worked in, if it has one.
+//
+// The `Parent: #N (epic)` marker is checked first because it is free and
+// the Tech Lead always writes it. The native Parent link is the fallback,
+// and not a redundant one: a child a human created under the epic in the
+// Azure DevOps UI has the link and no marker.
+const parentRepository = (
+  hosting: HostingShape,
+  target: TargetBoard,
+  ref: WorkItemRef,
+  body: string
+): Effect.Effect<ParentRepository> =>
+  Effect.gen(function* () {
+    const marked = epicParentOf(body)
+    let parentId = marked
+    if (parentId === undefined) {
+      const links = yield* attempt(hosting.workItemLinks(ref))
+      if ("failure" in links) {
+        return { _tag: "Undetermined", detail: `work item links: ${links.failure}` }
+      }
+      parentId = links.value.find((link) => link.kind === "Parent")?.id
+    }
+    if (parentId === undefined) {
+      return { _tag: "None" }
+    }
+    const parentRef = WorkItemRef.make({
+      project: ref.project,
+      repository: ref.repository,
+      id: parentId
+    })
+    const links = yield* attempt(hosting.developmentLinks(parentRef))
+    if ("failure" in links) {
+      return { _tag: "Undetermined", detail: `parent #${parentId} links: ${links.failure}` }
+    }
+    const linked = branchLink(links.value)
+    if (linked === undefined) {
+      // The parent has no branch either. Not an error: the board default
+      // is still a perfectly good answer for both of them.
+      return { _tag: "None" }
+    }
+    const repository = yield* attempt(hosting.repository(target.project, linked.repositoryId))
+    return "failure" in repository
+      ? {
+          _tag: "Undetermined",
+          detail: `parent #${parentId} repository ${linked.repositoryId}: ${repository.failure}`
+        }
+      : { _tag: "Repository", repository: repository.value.name }
+  })
+
 // Development links carry repository GUIDs, so the name has to be resolved
 // back before anything can clone it.
 export const resolveWorkspace = (
   hosting: HostingShape,
   target: TargetBoard,
   ref: WorkItemRef,
-  itemId: number
+  item: { readonly id: number; readonly body: string }
   // Never fails: a board that will not answer is reported as Undetermined
   // rather than thrown, because one unreadable item must not stall the beat.
 ): Effect.Effect<Routing> =>
@@ -92,13 +158,27 @@ export const resolveWorkspace = (
             workspace: { repository: repository.value.name, branch: linked.value, linked: true }
           }
     }
+    // No link of its own — but a child's parent may have answered already.
+    const parent = yield* parentRepository(hosting, target, ref, item.body)
+    if (parent._tag !== "None") {
+      return parent._tag === "Undetermined"
+        ? parent
+        : {
+            _tag: "Routed",
+            workspace: {
+              repository: parent.repository,
+              branch: branchFor(item.id),
+              linked: false
+            }
+          }
+    }
     return target.defaultRepository.length === 0
       ? { _tag: "Unroutable", links: links.value }
       : {
           _tag: "Routed",
           workspace: {
             repository: target.defaultRepository,
-            branch: branchFor(itemId),
+            branch: branchFor(item.id),
             linked: false
           }
         }
@@ -123,6 +203,7 @@ export const unroutableNotice = (
     `and the board has no default repository configured (\`${target.project}\`),`,
     "so the factory cannot tell which repository to work in.",
     "",
-    "Create a branch from this work item (Development → Create a branch), or",
-    "configure a default repository for the board, then re-add `factory:ready`."
+    "Create a branch from this work item (Development → Create a branch) —",
+    "or from its parent epic, which its children inherit — or configure a",
+    "default repository for the board, then re-add `factory:ready`."
   ].join("\n")

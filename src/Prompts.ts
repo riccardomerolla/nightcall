@@ -106,6 +106,14 @@ export const epicChildMarker = (parent: number): string => `Parent: #${parent} (
 
 export const isEpicChild = (body: string): boolean => /Parent: #\d+ \(epic\)\s*$/.test(body.trim())
 
+// The epic a child was decomposed from, for the routing that has to follow
+// it: a child inherits where its parent's work lives.
+export const epicParentOf = (body: string): number | undefined => {
+  const match = /Parent: #(\d+) \(epic\)\s*$/.exec(body.trim())
+  const id = Number(match?.[1] ?? Number.NaN)
+  return Number.isInteger(id) && id > 0 ? id : undefined
+}
+
 export const maxEpicChildren = 5
 
 export interface EpicIteration {

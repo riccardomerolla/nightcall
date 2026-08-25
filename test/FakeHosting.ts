@@ -18,7 +18,7 @@ export const stubHosting = (overrides: Partial<HostingShape> = {}): HostingShape
   developmentLinks: () => Effect.die("developmentLinks: unused"),
   linkBranch: () => Effect.die("linkBranch: unused"),
   linkPullRequest: () => Effect.die("linkPullRequest: unused"),
-  workItemLinks: () => Effect.die("workItemLinks: unused"),
+  workItemLinks: () => Effect.succeed([]),
   linkWorkItem: () => Effect.die("linkWorkItem: unused"),
   repository: () => Effect.die("repository: unused"),
   ...overrides

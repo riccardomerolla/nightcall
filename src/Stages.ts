@@ -99,7 +99,7 @@ export const runStage = (
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
     // A board spans repositories, so the Development links decide which one
     // this work item is worked in before any path is built.
-    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item)
     if (routing._tag === "Undetermined") {
       // Not a routing decision — see Workspace.ts. Give the claim back and
       // leave the item's tags alone so the next beat retries it.
@@ -668,7 +668,7 @@ export const runMend = (
   Effect.gen(function* () {
     const ref = intent.item.ref(projectRefOf(intent.target))
     const workspaceDir = resolve(environment["NIGHTCALL_WORKSPACE"] ?? ".factory")
-    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item.id)
+    const routing = yield* resolveWorkspace(hosting, intent.target, ref, intent.item)
     if (routing._tag !== "Routed") {
       if (routing._tag === "Undetermined") {
         yield* Effect.logWarning(
