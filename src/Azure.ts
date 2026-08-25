@@ -299,6 +299,47 @@ export const commentsArgs = (
   ...json
 ]
 
+// Setting tags REPLACES them, which `az boards work-item update --fields`
+// cannot do: it sends {op:"add", path:"/fields/System.Tags"}, and Azure
+// DevOps treats `add` on System.Tags as a MERGE. Adds landed, removals
+// were silently ignored, so a work item accumulated every checkpoint it
+// had ever held — factory:planned AND factory:coded AND factory:wip — and
+// wip outranks the rest in phaseOf, so no stage would touch it again.
+//
+// `replace` is the operation that overwrites, and no `az boards` verb
+// exposes it; the REST resource does, through `az devops invoke`, the same
+// way comments do. `replace` needs the field to exist, so an item with no
+// tags at all is still set with `--fields`, where `add` is correct anyway.
+export const setTagsPatchArgs = (
+  config: AzureConfig,
+  project: string,
+  workItemId: number,
+  inFile: string
+): ReadonlyArray<string> => [
+  "devops",
+  "invoke",
+  "--area",
+  "wit",
+  "--resource",
+  "workitems",
+  "--route-parameters",
+  `project=${project}`,
+  `id=${String(workItemId)}`,
+  "--api-version",
+  config.apiVersion,
+  "--http-method",
+  "PATCH",
+  "--in-file",
+  inFile,
+  "--media-type",
+  "application/json-patch+json",
+  ...org(config),
+  ...json
+]
+
+export const tagsPatchBody = (tags: ReadonlyArray<string>): string =>
+  JSON.stringify([{ op: "replace", path: "/fields/System.Tags", value: tags.join("; ") }])
+
 export const prListArgs = (
   config: AzureConfig,
   project: ProjectRef,
@@ -674,7 +715,22 @@ export const makeAzureHosting = (
       if (unchanged) {
         return { settled: true }
       }
-      yield* run(setTagsArgs(config, ref.id, next)).pipe(Effect.asVoid)
+      // An item that has no tags yet cannot be `replace`d — the field does
+      // not exist — and `add` is the right operation there anyway.
+      yield* current.length === 0
+        ? run(setTagsArgs(config, ref.id, next)).pipe(Effect.asVoid)
+        : Effect.scoped(
+            temporaryFiles
+              .write("nightcall-tags", ".json", tagsPatchBody(next))
+              .pipe(
+                Effect.mapError((error) =>
+                  ProcessError.make({ message: "tag patch body", detail: error.message })
+                ),
+                Effect.flatMap((path) =>
+                  run(setTagsPatchArgs(config, ref.project, ref.id, path)).pipe(Effect.asVoid)
+                )
+              )
+          )
       // Read back. A tag edit is the entire state machine — an add that
       // lands while its removes do not strands the work item somewhere no
       // stage looks, and that used to happen in silence.

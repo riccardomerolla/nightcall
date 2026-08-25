@@ -13,6 +13,7 @@ import {
   makeAzureHosting,
   queryArgs,
   setTagsArgs,
+  setTagsPatchArgs,
   toHtml,
   wiqlFor,
   workItemShowArgs,
@@ -100,14 +101,28 @@ const pollResponses = (
 ]
 
 // A tag edit is read-merge-write over the single System.Tags field: show
-// the work item, then write the merged list back.
+// the work item, then write the merged list back. The write is a JSON
+// patch `replace` through the REST resource, because `--fields` sends an
+// `add`, and Azure DevOps MERGES an add on System.Tags — removals were
+// silently dropped. An item with no tags yet is still set with --fields:
+// `replace` needs the field to exist.
 const tagEditResponses = (
   id: number,
   current: ReadonlyArray<string>,
-  next: ReadonlyArray<string>
+  next: ReadonlyArray<string>,
+  // Where the fake temporary-files service hands the patch body over.
+  tmp = "/tmp/llm4ts-schema.json"
 ): ReadonlyArray<readonly [string, ProcessResult]> => [
   [processCommandKey(["az", ...workItemShowArgs(azure, id)]), json(row(id, current.join("; ")))],
-  [processCommandKey(["az", ...setTagsArgs(azure, id, next)]), ok]
+  current.length === 0
+    ? ([processCommandKey(["az", ...setTagsArgs(azure, id, next)]), ok] as const)
+    : ([
+        processCommandKey([
+          "az",
+          ...setTagsPatchArgs(azure, project.project, id, tmp)
+        ]),
+        ok
+      ] as const)
 ]
 
 describe("Heartbeat", () => {
@@ -341,15 +356,17 @@ describe("Heartbeat", () => {
       // Two writes, not one: the fake answers every read identically, so
       // the edit's read-back always looks like the write was ignored and
       // its single retry fires. Both name the same item.
-      const writes = calls.filter((call) => call.argv.includes("--fields"))
+      // The write is a JSON patch through the REST resource now, not
+      // `--fields`: an `add` on System.Tags MERGES, so a removal never took.
+      const writes = calls.filter((call) => call.argv.includes("PATCH"))
       assert.strictEqual(writes.length, 2)
-      assert.isTrue(writes.every((call) => call.argv.includes("41")))
-      // And what it writes back no longer carries the claim.
-      assert.isTrue(
-        (writes[0]?.argv ?? []).some(
-          (argument) => argument.startsWith("System.Tags=") && !argument.includes(Tags.wip)
-        )
-      )
+      assert.isTrue(writes.every((call) => call.argv.includes("id=41")))
+      // And what it writes back no longer carries the claim. The tags are
+      // in the patch body now, not in argv.
+      const bodies = yield* temp.files
+      assert.isTrue(bodies.length > 0)
+      assert.isTrue(bodies.every((file) => !file.contents.includes(Tags.wip)))
+      assert.isTrue(bodies.every((file) => file.contents.includes(Tags.planned)))
     })
   )
 
@@ -360,7 +377,7 @@ describe("Heartbeat", () => {
       const fake = yield* makeFakeProcessExecutor({
         responses: new Map([
           ...pollResponses({ [Tags.ready]: readyRows }),
-          ...tagEditResponses(3, [Tags.ready], [Tags.wip]),
+          ...tagEditResponses(3, [Tags.ready], [Tags.wip], "/fake/tmp"),
           [
             processCommandKey([
               "az",
@@ -410,9 +427,17 @@ describe("Heartbeat", () => {
       assert.strictEqual(readOnly.length, 7)
       assert.isTrue(readOnly.every((call) => call.argv.includes("query")))
       assert.strictEqual(claimed.claims.length, 1)
-      // The claim swapped ready for wip through a real System.Tags write.
-      const setKey = processCommandKey(["az", ...setTagsArgs(azure, 3, [Tags.wip])])
+      // The claim swapped ready for wip through a real System.Tags write —
+      // a JSON patch `replace`, because `--fields` sends an `add` and Azure
+      // DevOps merges an add on System.Tags, so `ready` would have stayed.
+      const setKey = processCommandKey([
+        "az",
+        ...setTagsPatchArgs(azure, project.project, 3, "/fake/tmp")
+      ])
       assert.isTrue(allCalls.map((call) => processCommandKey(call.argv)).includes(setKey))
+      const patched = (yield* temp.files).filter((file) => file.contents.includes("System.Tags"))
+      assert.isTrue(patched.every((file) => !file.contents.includes(Tags.ready)))
+      assert.isTrue(patched.every((file) => file.contents.includes(Tags.wip)))
       // The comment body reaches az as a JSON file, never as an argument.
       const commentCall = allCalls.find((call) => call.argv.includes("comments"))
       assert.include(commentCall?.argv ?? [], "--in-file")

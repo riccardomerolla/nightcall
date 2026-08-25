@@ -29,6 +29,7 @@ import {
   queryArgs,
   quoteWiql,
   setTagsArgs,
+  setTagsPatchArgs,
   toHtml,
   toText,
   wiqlFor,
@@ -424,9 +425,9 @@ describe("Azure DevOps hosting", () => {
 
   it.effect("edits tags as one read-merge-write over System.Tags", () =>
     Effect.gen(function* () {
-      const { fake, hosting } = yield* hostingWith([
+      const { fake, temp, hosting } = yield* hostingWith([
         [processCommandKey(["az", ...workItemShowArgs(azure, 7)]), json(workItemJson())],
-        [processCommandKey(["az", ...setTagsArgs(azure, 7, ["urgent", Tags.wip])]), ok]
+        [processCommandKey(["az", ...setTagsPatchArgs(azure, project.project, 7, "/fake/tmp")]), ok]
       ])
 
       yield* hosting.editTags(ref, [Tags.wip], [Tags.ready])
@@ -445,10 +446,23 @@ describe("Azure DevOps hosting", () => {
       // calls, two of them writes. Pinned exactly because the retry being
       // bounded at ONE is the property that matters — a self-verifying
       // write that retries on disagreement is a loop if nothing stops it.
-      const writes = calls.filter((call) => call.argv.includes("--fields"))
+      const writes = calls.filter((call) => call.argv.includes("PATCH"))
       assert.strictEqual(calls.length, 6)
       assert.strictEqual(writes.length, 2)
-      assert.isTrue(writes.every((call) => call.argv.includes("System.Tags=urgent; factory:wip")))
+      // The tags travel in the patch body, not in argv: `--fields` sends
+      // {op:"add"}, and Azure DevOps MERGES an add on System.Tags, so a
+      // removal was silently dropped. `replace` is the operation that
+      // overwrites, and only the REST resource exposes it.
+      const bodies = yield* temp.files
+      assert.isTrue(
+        bodies.every(
+          (file) =>
+            file.contents ===
+            JSON.stringify([
+              { op: "replace", path: "/fields/System.Tags", value: "urgent; factory:wip" }
+            ])
+        )
+      )
     })
   )
 
