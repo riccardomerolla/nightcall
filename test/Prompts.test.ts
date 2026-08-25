@@ -22,6 +22,7 @@ const issue = WorkItemSummary.make({
   author: "ceo",
   tags: [],
   state: "Active",
+  type: "Task",
   updatedAt: "2026-07-31T00:00:00Z"
 })
 
@@ -211,6 +212,7 @@ describe("Prompts", () => {
         author: "bot",
         tags: [],
         state: "Active",
+        type: "Task",
         updatedAt: "2026-08-04T00:00:00Z"
       })
     const all = [child(2, 1), child(3, 1), child(9, 8)]

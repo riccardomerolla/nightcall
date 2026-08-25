@@ -54,6 +54,12 @@ export class WorkItemSummary extends Schema.Class<WorkItemSummary>("WorkItemSumm
   author: Schema.String,
   tags: Schema.Array(Schema.String),
   state: Schema.String,
+  // `System.WorkItemType` — Epic, Feature, User Story, Task, Bug… This has
+  // no GitHub counterpart, where an issue is an issue and a label is the
+  // only way to say "this one is a container". Azure DevOps says it in the
+  // item's own type, so the factory reads it rather than making a human
+  // repeat it as a tag.
+  type: Schema.String,
   updatedAt: Schema.String
 }) {
   ref(project: ProjectRef): WorkItemRef {

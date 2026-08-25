@@ -72,7 +72,21 @@ export const phaseOf = (tags: ReadonlyArray<string>): WorkItemPhase => {
                   : "Unmanaged"
 }
 
-export const isEpic = (tags: ReadonlyArray<string>): boolean => tags.includes(Tags.epic)
+// Container types in every stock Azure DevOps process template. An Epic or
+// a Feature is a thing to break down, not a thing to implement — the board
+// already says so, so requiring a `factory:epic` tag on top made an
+// operator repeat what Azure DevOps had told us. The tag still forces
+// decomposition of a type that is not a container by default.
+export const defaultEpicTypes: ReadonlyArray<string> = ["Epic", "Feature"]
+
+export const isEpic = (
+  item: { readonly type: string; readonly tags: ReadonlyArray<string> },
+  epicTypes: ReadonlyArray<string> = defaultEpicTypes
+): boolean =>
+  item.tags.includes(Tags.epic) ||
+  // Process templates are localized and vary in casing; the type is a
+  // display name, not an identifier.
+  epicTypes.some((candidate) => candidate.toLowerCase() === item.type.trim().toLowerCase())
 
 export const isFresh = (tags: ReadonlyArray<string>): boolean => tags.includes(Tags.fresh)
 

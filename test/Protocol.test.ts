@@ -27,8 +27,18 @@ describe("Protocol", () => {
   })
 
   it("reads epic and budget-override tags", () => {
-    assert.isTrue(isEpic([Tags.ready, Tags.epic]))
-    assert.isFalse(isEpic([Tags.ready]))
+    // The tag still forces decomposition of any type.
+    assert.isTrue(isEpic({ type: "Task", tags: [Tags.ready, Tags.epic] }))
+    assert.isFalse(isEpic({ type: "Task", tags: [Tags.ready] }))
+    // Azure DevOps says it in the type, so a human need not repeat it.
+    assert.isTrue(isEpic({ type: "Epic", tags: [Tags.ready] }))
+    assert.isTrue(isEpic({ type: "Feature", tags: [Tags.ready] }))
+    // Process templates are localized and vary in casing.
+    assert.isTrue(isEpic({ type: "epic", tags: [] }))
+    assert.isFalse(isEpic({ type: "User Story", tags: [Tags.ready] }))
+    // A board that calls its containers something else configures it.
+    assert.isTrue(isEpic({ type: "Initiative", tags: [] }, ["Initiative"]))
+    assert.isFalse(isEpic({ type: "Epic", tags: [] }, ["Initiative"]))
     assert.strictEqual(budgetOverrideUsd([Tags.ready]), undefined)
     assert.strictEqual(budgetOverrideUsd(["factory:budget-20"]), 20)
     assert.strictEqual(budgetOverrideUsd(["factory:budget-20", "factory:budget-5"]), 20)

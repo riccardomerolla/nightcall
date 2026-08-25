@@ -8,6 +8,7 @@ import {
   type AzureConfig
 } from "./Azure.ts"
 import { ProjectRef } from "./Hosting.ts"
+import { defaultEpicTypes } from "./Protocol.ts"
 
 // Company configuration, decoded once at startup from the environment.
 // No secret is ever read here: the Azure DevOps credential stays inside
@@ -41,6 +42,10 @@ export class ConfigError extends Schema.TaggedErrorClass<ConfigError>("nightcall
 
 export class CompanyConfig extends Schema.Class<CompanyConfig>("CompanyConfig")({
   targets: Schema.Array(TargetBoard),
+  // Work item types the Tech Lead decomposes instead of the engineer
+  // implementing. Configurable because process templates differ — and are
+  // localized, so a board can call its containers something else entirely.
+  epicTypes: Schema.Array(Schema.String),
   heartbeatSeconds: Schema.Int,
   issueBudgetUsd: Schema.Number,
   dailyBudgetUsd: Schema.Number,
@@ -150,9 +155,21 @@ export const configFromEnv = (
     }
     targets.push(target)
   }
+  // A child is created as NIGHTCALL_ADO_WORK_ITEM_TYPE. If that type were
+  // also an epic type, every child would be decomposed into more children
+  // without end, so the child type can never be one — the board's own
+  // configuration wins over this default.
+  const childType = (env["NIGHTCALL_ADO_WORK_ITEM_TYPE"] ?? "").trim().toLowerCase()
+  const epicTypes = (env["NIGHTCALL_ADO_EPIC_TYPES"] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
   return Effect.succeed(
     CompanyConfig.make({
       targets,
+      epicTypes: (epicTypes.length === 0 ? defaultEpicTypes : epicTypes).filter(
+        (type) => childType.length === 0 || type.toLowerCase() !== childType
+      ),
       heartbeatSeconds: Math.floor(positiveOr(env["NIGHTCALL_HEARTBEAT_SECONDS"], 120)),
       issueBudgetUsd: positiveOr(env["NIGHTCALL_ISSUE_BUDGET_USD"], 5),
       dailyBudgetUsd: positiveOr(env["NIGHTCALL_DAILY_BUDGET_USD"], 25),

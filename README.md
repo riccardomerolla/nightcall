@@ -82,6 +82,7 @@ are the same thing by the time the daemon reads them.
 | `NIGHTCALL_TARGETS`             | (required)           | comma-separated boards: `project/default-repository`, or bare `project`                         |
 | `NIGHTCALL_AZ_BIN`              | `az`                 | escape hatch: the command to launch the Azure CLI, every platform included                      |
 | `NIGHTCALL_ADO_WORK_ITEM_TYPE`  | `Task`               | type created for epic children (`User Story`, `Product Backlog Item`, …)                        |
+| `NIGHTCALL_ADO_EPIC_TYPES`      | `Epic,Feature`       | work item types the Tech Lead decomposes instead of implementing; the child type above is always excluded, and `factory:epic` still forces any item |
 | `NIGHTCALL_ADO_TARGET_BRANCH`   | `main`               | pull-request target branch                                                                      |
 | `NIGHTCALL_ADO_API_VERSION`     | `7.1-preview`        | API version for the work-item comments resource; `N.N` or `N.N-preview` only — `az devops invoke` cannot parse a `-preview.N` resource suffix, so one given here is trimmed |
 | `NIGHTCALL_CLAIM`               | off                  | `1` arms claiming and the engineer pipeline                                                     |

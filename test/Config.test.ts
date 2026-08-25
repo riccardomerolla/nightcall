@@ -83,3 +83,38 @@ describe("Config", () => {
     })
   )
 })
+
+describe("Epic types", () => {
+  it.effect("decomposes the stock container types by default", () =>
+    Effect.gen(function* () {
+      const config = yield* configFromEnv({ NIGHTCALL_TARGETS: "acme/widgets" })
+
+      assert.deepStrictEqual([...config.epicTypes], ["Epic", "Feature"])
+    })
+  )
+
+  it.effect("takes the board's own container names", () =>
+    Effect.gen(function* () {
+      const config = yield* configFromEnv({
+        NIGHTCALL_TARGETS: "acme/widgets",
+        NIGHTCALL_ADO_EPIC_TYPES: "Initiative, Epica "
+      })
+
+      assert.deepStrictEqual([...config.epicTypes], ["Initiative", "Epica"])
+    })
+  )
+
+  it.effect("never lets the child type be an epic type", () =>
+    Effect.gen(function* () {
+      // Children are created as NIGHTCALL_ADO_WORK_ITEM_TYPE. If that type
+      // also counted as an epic, each child would be decomposed into more
+      // children, forever, against a real board.
+      const config = yield* configFromEnv({
+        NIGHTCALL_TARGETS: "acme/widgets",
+        NIGHTCALL_ADO_WORK_ITEM_TYPE: "Feature"
+      })
+
+      assert.deepStrictEqual([...config.epicTypes], ["Epic"])
+    })
+  )
+})

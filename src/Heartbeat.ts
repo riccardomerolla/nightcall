@@ -6,7 +6,7 @@ import { Info, type FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import type { HostingShape, WorkItemRef, WorkItemSummary } from "./Hosting.ts"
 import { projectRefOf, type CompanyConfig, type TargetBoard } from "./Config.ts"
 import { watchEpics } from "./EpicWatch.ts"
-import { blockedByRefs } from "./Prompts.ts"
+import { blockedByRefs, isEpicChild } from "./Prompts.ts"
 import { LedgerEntry, appendLedger, readLedger, spentToday } from "./Ledger.ts"
 import { Tags, claim, isEpic, phaseOf, signed, stageClaim } from "./Protocol.ts"
 
@@ -103,6 +103,11 @@ export const decide = (
   // so blocking them would only strand finished branches.
   const blocked = (snapshot: TargetSnapshot, item: WorkItemSummary): boolean =>
     blockedByRefs(item.body).some((number) => snapshot.openIds.has(number))
+  // A child the Tech Lead created is never itself an epic, whatever its
+  // type: a board configured to create children of a container type would
+  // otherwise decompose its own output, forever.
+  const decomposable = (item: WorkItemSummary): boolean =>
+    isEpic(item, config.epicTypes) && !isEpicChild(item.body)
   const takeStage = (
     pick: (snapshot: TargetSnapshot) => ReadonlyArray<WorkItemSummary>,
     cap: number,
@@ -123,7 +128,7 @@ export const decide = (
   }
   for (const snapshot of snapshots) {
     for (const item of oldestFirst(snapshot.ready)) {
-      if (isEpic(item.tags)) {
+      if (decomposable(item)) {
         if (!throttled) {
           epics.push({ target: snapshot.target, item })
         }

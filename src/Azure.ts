@@ -171,6 +171,7 @@ export const workItemFields: ReadonlyArray<string> = [
   "System.Description",
   "System.State",
   "System.Tags",
+  "System.WorkItemType",
   "System.CreatedBy",
   "System.ChangedDate"
 ]
@@ -409,6 +410,7 @@ const AdoWorkItem = Schema.Struct({
     "System.Description": Schema.optionalKey(Schema.String),
     "System.State": Schema.optionalKey(Schema.String),
     "System.Tags": Schema.optionalKey(Schema.String),
+    "System.WorkItemType": Schema.optionalKey(Schema.String),
     "System.CreatedBy": Schema.optionalKey(Identity),
     "System.ChangedDate": Schema.optionalKey(Schema.String)
   })
@@ -428,6 +430,7 @@ const toSummary = (item: typeof AdoWorkItem.Type): WorkItemSummary =>
     author: identityName(item.fields["System.CreatedBy"]),
     tags: parseTags(item.fields["System.Tags"] ?? ""),
     state: item.fields["System.State"] ?? "",
+    type: item.fields["System.WorkItemType"] ?? "",
     updatedAt: item.fields["System.ChangedDate"] ?? ""
   })
 

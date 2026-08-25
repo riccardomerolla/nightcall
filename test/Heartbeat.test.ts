@@ -35,6 +35,7 @@ const azure: AzureConfig = {
 
 const config = CompanyConfig.make({
   targets: [target],
+  epicTypes: ["Epic", "Feature"],
   heartbeatSeconds: 120,
   issueBudgetUsd: 5,
   dailyBudgetUsd: 25,
@@ -44,7 +45,11 @@ const config = CompanyConfig.make({
 
 const empty = { planned: [], coded: [], reviewed: [], inReview: [], openIds: new Set<number>() }
 
-const summary = (id: number, tags: ReadonlyArray<string>): WorkItemSummary =>
+const summary = (
+  id: number,
+  tags: ReadonlyArray<string>,
+  type = "Task"
+): WorkItemSummary =>
   WorkItemSummary.make({
     id,
     title: `Item ${id}`,
@@ -52,6 +57,7 @@ const summary = (id: number, tags: ReadonlyArray<string>): WorkItemSummary =>
     author: "ceo",
     tags,
     state: "Active",
+    type,
     updatedAt: "2026-07-31T00:00:00Z"
   })
 
@@ -125,6 +131,62 @@ describe("Heartbeat", () => {
     assert.strictEqual(busy.inFlight, 1)
   })
 
+  it("decomposes an Epic on its type, without a factory:epic tag", () => {
+    // Azure DevOps has first-class work item types; GitHub, where this
+    // protocol grew up, has only labels. An Epic that a human tagged
+    // `factory:ready` was claimed by the engineer pipeline and worked as
+    // if it were a task, because the daemon only ever looked at tags —
+    // and did not even ask the board for the type.
+    const decision = decide(
+      [
+        {
+          target,
+          ready: [
+            summary(3, [Tags.ready], "Epic"),
+            summary(4, [Tags.ready], "Feature"),
+            summary(5, [Tags.ready], "User Story")
+          ],
+          wip: [],
+          ...empty
+        }
+      ],
+      config
+    )
+
+    assert.deepStrictEqual(
+      decision.epics.map((intent) => intent.item.id),
+      [3, 4]
+    )
+    // Only the implementable one reaches an engineer seat.
+    assert.deepStrictEqual(
+      decision.claims.map((intent) => intent.item.id),
+      [5]
+    )
+  })
+
+  it("never decomposes a child the Tech Lead created, whatever its type", () => {
+    // A board configured to create children of a container type would
+    // otherwise decompose its own output, forever.
+    const child = WorkItemSummary.make({
+      id: 8,
+      title: "Child",
+      body: "Work.\n\nParent: #3 (epic)",
+      author: "bot",
+      tags: [Tags.ready],
+      state: "Active",
+      type: "Feature",
+      updatedAt: "2026-07-31T00:00:00Z"
+    })
+
+    const decision = decide([{ target, ready: [child], wip: [], ...empty }], config)
+
+    assert.deepStrictEqual(decision.epics, [])
+    assert.deepStrictEqual(
+      decision.claims.map((intent) => intent.item.id),
+      [8]
+    )
+  })
+
   it("decide blocks plan and code claims until Blocked-by prerequisites close", () => {
     const blocked = WorkItemSummary.make({
       id: 52,
@@ -133,6 +195,7 @@ describe("Heartbeat", () => {
       author: "bot",
       tags: [Tags.planned],
       state: "Active",
+      type: "Task",
       updatedAt: "2026-08-04T00:00:00Z"
     })
     const snapshot = (openIds: ReadonlySet<number>) => ({
