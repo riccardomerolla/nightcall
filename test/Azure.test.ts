@@ -40,6 +40,7 @@ import {
   artifactUri,
   relationAddArgs,
   repositoryShowArgs,
+  workItemLinkArgs,
   workItemShowArgs as relationsShowArgs
 } from "@llm4ts/flow/AzureDevOpsTool"
 import { ProjectRef, WorkItemRef } from "../src/Hosting.ts"
@@ -56,6 +57,8 @@ const azure: AzureConfig = {
 
 const project = ProjectRef.make({ project: "acme", repository: "widgets" })
 const ref = WorkItemRef.make({ project: "acme", repository: "widgets", id: 7 })
+// The adapter builds link argv from llm4ts's per-project config.
+const ado = adoConfigFor(azure, "acme", "widgets")
 
 const ok = ProcessResult.make({ stdout: [], exitCode: 0 })
 const json = (payload: string): ProcessResult =>
@@ -420,6 +423,62 @@ describe("Azure DevOps hosting", () => {
 
       assert.strictEqual(calls.length, 2)
       assert.isTrue(calls.some((call) => call.argv.includes("System.Tags=urgent; factory:wip")))
+    })
+  )
+
+  it.effect("tells the board a parent and a blocker as links, not only as prose", () =>
+    Effect.gen(function* () {
+      // `Parent: #3 (epic)` in a description reads the same to a human and
+      // means nothing to the backlog tree. Predecessor is what Azure DevOps
+      // calls "blocked by", and a work item link takes --target-id where an
+      // artifact link takes --target-url.
+      const { fake, hosting } = yield* hostingWith([
+        [processCommandKey(["az", ...workItemLinkArgs(ado, 7, "Parent", 3)]), ok],
+        [processCommandKey(["az", ...workItemLinkArgs(ado, 7, "Predecessor", 5)]), ok]
+      ])
+
+      yield* hosting.linkWorkItem(ref, "Parent", 3)
+      yield* hosting.linkWorkItem(ref, "Predecessor", 5)
+      const calls = yield* fake.recorded
+
+      assert.strictEqual(calls.length, 2)
+      assert.isTrue(calls.every((call) => call.argv.includes("--target-id")))
+      assert.isTrue(calls.every((call) => !call.argv.includes("--target-url")))
+      assert.deepStrictEqual(
+        calls.map((call) => call.argv[call.argv.indexOf("--relation-type") + 1]),
+        ["parent", "predecessor"]
+      )
+    })
+  )
+
+  it.effect("reads hierarchy and dependency links back off the work item", () =>
+    Effect.gen(function* () {
+      const relations = JSON.stringify({
+        id: 7,
+        relations: [
+          {
+            rel: "System.LinkTypes.Hierarchy-Reverse",
+            url: "https://dev.azure.com/acme/_apis/wit/workItems/3"
+          },
+          {
+            rel: "System.LinkTypes.Dependency-Reverse",
+            url: "https://dev.azure.com/acme/_apis/wit/workItems/5"
+          }
+        ]
+      })
+      const { hosting } = yield* hostingWith([
+        [processCommandKey(["az", ...relationsShowArgs(ado, 7, "relations")]), json(relations)]
+      ])
+
+      const links = yield* hosting.workItemLinks(ref)
+
+      assert.deepStrictEqual(
+        links.map((link) => [link.kind, link.id]),
+        [
+          ["Parent", 3],
+          ["Predecessor", 5]
+        ]
+      )
     })
   )
 

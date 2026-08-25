@@ -9,6 +9,8 @@ import {
   type GitRepository,
   parseDevelopmentLinks,
   parseRepository,
+  parseWorkItemLinks,
+  workItemLinkArgs,
   relationAddArgs,
   repositoryShowArgs,
   workItemShowArgs as relationsShowArgs
@@ -838,6 +840,25 @@ export const makeAzureHosting = (
             value: String(pullRequestId)
           })
         )
+      ),
+    workItemLinks: (ref) =>
+      read(
+        "ado workItemLinks",
+        run(
+          relationsShowArgs(adoConfigFor(config, ref.project, ref.repository), ref.id, "relations")
+        ).pipe(Effect.flatMap(parseWorkItemLinks))
+      ),
+    linkWorkItem: (ref, kind, targetId) =>
+      write(
+        "ado linkWorkItem",
+        run(
+          workItemLinkArgs(
+            adoConfigFor(config, ref.project, ref.repository),
+            ref.id,
+            kind,
+            targetId
+          )
+        ).pipe(Effect.asVoid)
       ),
     repository: (project, nameOrId) => read("ado repository", repositoryOf(project, nameOrId))
   }

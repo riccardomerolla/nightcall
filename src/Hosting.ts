@@ -1,9 +1,14 @@
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import type { GitArtifact, GitRepository } from "@llm4ts/flow/AzureDevOpsTool"
+import type {
+  GitArtifact,
+  GitRepository,
+  WorkItemLink,
+  WorkItemLinkKind
+} from "@llm4ts/flow/AzureDevOpsTool"
 import type { FlowError } from "@llm4ts/flow/FlowError"
 
-export type { GitArtifact, GitRepository }
+export type { GitArtifact, GitRepository, WorkItemLink, WorkItemLinkKind }
 
 // The control-plane port. Nightcall's org chart, protocol, and pipeline
 // speak only this interface; `Azure.ts` is the one module that knows the
@@ -156,6 +161,19 @@ export interface HostingShape {
     ref: WorkItemRef,
     repository: string,
     pullRequestId: number
+  ) => Effect.Effect<void, FlowError>
+  // The work item's own links: hierarchy (Parent/Child) and dependency
+  // (Predecessor/Successor). The protocol writes `Parent: #12` and
+  // `Blocked-by: #9` into the body because that is all a GitHub issue can
+  // hold; Azure DevOps holds the same facts as links the backlog tree, the
+  // dependency view, and a query can all see, so it is told both ways.
+  readonly workItemLinks: (
+    ref: WorkItemRef
+  ) => Effect.Effect<ReadonlyArray<WorkItemLink>, FlowError>
+  readonly linkWorkItem: (
+    ref: WorkItemRef,
+    kind: WorkItemLinkKind,
+    targetId: number
   ) => Effect.Effect<void, FlowError>
   // Resolves a repository by name OR by the GUID a Development link carries.
   readonly repository: (

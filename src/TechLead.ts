@@ -137,6 +137,16 @@ export const runEpic = (
             [Tags.ready]
           )
           numberOfOrdinal.push(childRef.id)
+          // The same two facts the body states in prose, told to the board
+          // in the form it can act on: a Parent link puts the child under
+          // the epic in the backlog tree, and a Predecessor link is what
+          // "blocked by" is called in Azure DevOps. Best-effort on purpose
+          // — the body markers are what the daemon reads, so a link the
+          // board refuses must not cost the decomposition.
+          yield* Effect.ignore(hosting.linkWorkItem(childRef, "Parent", intent.item.id))
+          for (const blocker of blockers) {
+            yield* Effect.ignore(hosting.linkWorkItem(childRef, "Predecessor", blocker))
+          }
           created.push(
             `- #${childRef.id} ${child.title}${
               blockers.length === 0 ? "" : ` (blocked by ${blockers.map((n) => `#${n}`).join(", ")})`
