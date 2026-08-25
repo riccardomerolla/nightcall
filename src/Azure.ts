@@ -428,15 +428,24 @@ export const parseWorkItem = (payload: string): Effect.Effect<WorkItemSummary, P
     Effect.mapError(decodeFailure("az boards work-item show"))
   )
 
+// The Azure CLI prints NOTHING for a command that returns None — not
+// `[]`, not `null`. `az boards query` returns None precisely when the WIQL
+// matches no work items, so an empty queue arrives as empty stdout with
+// exit code 0. A quiet board is the state a heartbeat finds most of the
+// time, and parsing it as JSON fails with "Unexpected end of JSON input".
+const noRows = (payload: string): boolean => payload.trim().length === 0
+
 // `az boards query` flattens a WIQL result into whole work items, so a
 // heartbeat poll is one call per tag rather than a fan-out over ids.
 export const parseWorkItems = (
   payload: string
 ): Effect.Effect<ReadonlyArray<WorkItemSummary>, ProcessError> =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(AdoWorkItem)))(payload).pipe(
-    Effect.map((items) => items.map(toSummary)),
-    Effect.mapError(decodeFailure("az boards query"))
-  )
+  noRows(payload)
+    ? Effect.succeed<ReadonlyArray<WorkItemSummary>>([])
+    : Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(AdoWorkItem)))(payload).pipe(
+        Effect.map((items) => items.map(toSummary)),
+        Effect.mapError(decodeFailure("az boards query"))
+      )
 
 const AdoComment = Schema.Struct({
   id: Schema.Int,

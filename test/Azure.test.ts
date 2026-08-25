@@ -299,6 +299,23 @@ describe("Azure DevOps parsing", () => {
     })
   )
 
+  it.effect("reads a quiet board as an empty queue, not a crash", () =>
+    Effect.gen(function* () {
+      // The Azure CLI prints NOTHING for a command that returns None, and
+      // `az boards query` returns None exactly when the WIQL matches no
+      // work items. So a board with nothing tagged for the factory — which
+      // is what a heartbeat finds most of the time — arrives as empty
+      // stdout with exit code 0, and decoding it as JSON fails with
+      // "Unexpected end of JSON input".
+      assert.deepStrictEqual([...(yield* parseWorkItems(""))], [])
+      assert.deepStrictEqual([...(yield* parseWorkItems("  \r\n"))], [])
+
+      // Emptiness is "no rows"; malformed output is still an error.
+      const broken = yield* Effect.flip(parseWorkItems('[{"id":'))
+      assert.strictEqual(broken._tag, "Process")
+    })
+  )
+
   it.effect("orders comments oldest first, because guidance detection is positional", () =>
     Effect.gen(function* () {
       const comments = yield* parseComments(
