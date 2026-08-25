@@ -434,7 +434,12 @@ describe("Azure DevOps hosting", () => {
       yield* hosting.editTags(ref, [], [])
       const calls = yield* fake.recorded
 
-      assert.strictEqual(calls.length, 2)
+      // Read, write, and read BACK. The tag field is the whole state
+      // machine: an add that lands while its removes do not leaves the
+      // item wearing a checkpoint it has passed and a claim nobody holds,
+      // which no stage will ever pick up. The read-back is what turns that
+      // from silence into a logged warning.
+      assert.strictEqual(calls.length, 3)
       assert.isTrue(calls.some((call) => call.argv.includes("System.Tags=urgent; factory:wip")))
     })
   )

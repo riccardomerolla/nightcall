@@ -34,6 +34,10 @@ const program = Effect.gen(function* () {
   // Serializes clone/fetch/worktree-add on the shared per-target clone
   // while concurrent stage workers run their long LLM phases in parallel.
   const gitLock = yield* Semaphore.make(1)
+  // Tag edits are read-merge-write over one field, and this daemon has
+  // several writers: forked stage workers, the beat's claims, the beat's
+  // stale-claim release. Serialized, they cannot lose each other's writes.
+  const tagLock = yield* Semaphore.make(1)
   const workspaceDir = resolve(process.env["NIGHTCALL_WORKSPACE"] ?? ".factory")
   const standupItem = parseWorkItemRef(process.env["NIGHTCALL_STANDUP_ITEM"] ?? "")
   const hosting = makeAzureHosting(
@@ -41,7 +45,8 @@ const program = Effect.gen(function* () {
     nodeProcessExecutor,
     nodeTemporaryFiles,
     process.cwd(),
-    loggingEvents
+    loggingEvents,
+    tagLock
   )
   yield* Effect.log(
     `Nightcall up: ${azure.orgUrl} — ${config.targets.map((target) => target.slug).join(", ")} ` +

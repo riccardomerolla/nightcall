@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
+import * as Semaphore from "effect/Semaphore"
 import { Capabilities } from "@llm4ts/core/Capability"
 import type { ProcessExecutorShape, ProcessResult } from "@llm4ts/core/ProcessExecutor"
 import type { TemporaryFilesShape } from "@llm4ts/core/TemporaryFiles"
@@ -592,7 +593,10 @@ export const makeAzureHosting = (
   processExecutor: ProcessExecutorShape,
   temporaryFiles: TemporaryFilesShape,
   workDir: string,
-  events: FlowEventsShape
+  events: FlowEventsShape,
+  // Serializes tag read-merge-write across the daemon's concurrent
+  // writers. Optional so a test can drive one edit without a runtime.
+  tagLock?: Semaphore.Semaphore
 ): HostingShape => {
   // No shell, ever. The executor spawns argv directly, so every argument
   // reaches `az` exactly as built — WIQL operators like `<>` included. Under
@@ -645,6 +649,50 @@ export const makeAzureHosting = (
       Effect.flatMap(parseWorkItem),
       Effect.map((item) => item.tags)
     )
+
+  // Tags are ONE semicolon-joined field, so every edit is a read, a merge,
+  // and a write — and the daemon has several writers: a forked stage
+  // worker finishing, the beat claiming, the beat releasing a stale claim.
+  // Two of those interleaving is a lost update, and a lost update here is
+  // not cosmetic: it leaves an item wearing a checkpoint it has passed and
+  // a claim nobody holds, which is a state no stage will pick up. Held
+  // across the whole read-merge-write, this makes them atomic. Only this
+  // daemon writes these tags, so in-process is the whole of it.
+  const serialized = <A>(effect: Effect.Effect<A, FlowError>): Effect.Effect<A, FlowError> =>
+    tagLock === undefined ? effect : tagLock.withPermits(1)(effect)
+
+  const editTagsOnce = (
+    ref: WorkItemRef,
+    add: ReadonlyArray<string>,
+    remove: ReadonlyArray<string>
+  ): Effect.Effect<void, FlowError> =>
+    Effect.gen(function* () {
+      const current = yield* readTags(ref)
+      const next = mergeTags(current, add, remove)
+      const unchanged =
+        next.length === current.length && next.every((tag, index) => tag === current[index])
+      if (unchanged) {
+        return
+      }
+      yield* run(setTagsArgs(config, ref.id, next)).pipe(Effect.asVoid)
+      // Read back. A tag edit is the entire state machine — an add that
+      // lands while its removes do not strands the work item somewhere no
+      // stage looks, and until now that happened in silence. This says so,
+      // naming the item and what the board actually holds.
+      const written = yield* Effect.orElseSucceed(readTags(ref), () => next)
+      const has = (tag: string): boolean =>
+        written.some((present) => present.toLowerCase() === tag.toLowerCase())
+      const missed = [
+        ...add.filter((tag) => !has(tag)),
+        ...remove.filter((tag) => has(tag))
+      ]
+      if (missed.length > 0) {
+        yield* Effect.logWarning(
+          `tag edit did not take on #${ref.id}: asked to add [${add.join(", ")}] and remove ` +
+            `[${remove.join(", ")}], board now holds [${written.join(", ")}]`
+        )
+      }
+    })
 
   const repositoryOf = (
     project: string,
@@ -744,18 +792,7 @@ export const makeAzureHosting = (
     editTags: (ref, add, remove) =>
       add.length === 0 && remove.length === 0
         ? Effect.void
-        : write(
-            "ado editTags",
-            readTags(ref).pipe(
-              Effect.flatMap((current) => {
-                const next = mergeTags(current, add, remove)
-                return next.length === current.length &&
-                  next.every((tag, index) => tag === current[index])
-                  ? Effect.void
-                  : run(setTagsArgs(config, ref.id, next)).pipe(Effect.asVoid)
-              })
-            )
-          ),
+        : write("ado editTags", serialized(editTagsOnce(ref, add, remove))),
     writeComment: (ref, body) =>
       write(
         "ado writeComment",
