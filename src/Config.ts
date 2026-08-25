@@ -8,6 +8,7 @@ import {
   type AzureConfig
 } from "./Azure.ts"
 import { ProjectRef } from "./Hosting.ts"
+import { coderFor, coderIds } from "@llm4ts/runner/Connectors"
 import { defaultEpicTypes } from "./Protocol.ts"
 
 // Company configuration, decoded once at startup from the environment.
@@ -121,6 +122,20 @@ export const azureFromEnv = (
 export const configFromEnv = (
   env: Record<string, string | undefined>
 ): Effect.Effect<CompanyConfig, ConfigError> => {
+  // A coder llm4ts does not know is not a small mistake: coderFromEnv falls
+  // back to claude, so the company would quietly hire a different CLI than
+  // the one asked for and only the invoice would show it. Refuse at
+  // startup, naming what would have worked.
+  const coder = (env["LLM4TS_CODER"] ?? env["LLM4ZIO_CODER"] ?? "").trim()
+  if (coder.length > 0 && coderFor(coder) === undefined) {
+    return Effect.fail(
+      new ConfigError({
+        message:
+          `LLM4TS_CODER '${coder}' is not a coder llm4ts knows. ` +
+          `Expected one of: ${coderIds.join(", ")}.`
+      })
+    )
+  }
   const rawTargets = (env["NIGHTCALL_TARGETS"] ?? "")
     .split(",")
     .map((entry) => entry.trim())

@@ -118,3 +118,31 @@ describe("Epic types", () => {
     })
   )
 })
+
+describe("Coder", () => {
+  it.effect("refuses a coder llm4ts does not know", () =>
+    Effect.gen(function* () {
+      // coderFromEnv falls back to claude, so an unrecognized name would
+      // quietly hire a different CLI than the one asked for and only the
+      // invoice would show it.
+      const error = yield* Effect.flip(
+        configFromEnv({ NIGHTCALL_TARGETS: "acme/widgets", LLM4TS_CODER: "gemni" })
+      )
+
+      assert.include(error.message, "gemni")
+      // The message names what would have worked.
+      assert.include(error.message, "gemini-cli")
+    })
+  )
+
+  it.effect("accepts a connector id as readily as a short name", () =>
+    Effect.gen(function* () {
+      // `gemini-cli` is the name llm4ts prints for this connector, so it is
+      // the one an operator is most likely to have written.
+      yield* configFromEnv({ NIGHTCALL_TARGETS: "acme/widgets", LLM4TS_CODER: "gemini-cli" })
+      yield* configFromEnv({ NIGHTCALL_TARGETS: "acme/widgets", LLM4TS_CODER: "gemini" })
+      // Unset is the company default, not an error.
+      yield* configFromEnv({ NIGHTCALL_TARGETS: "acme/widgets" })
+    })
+  )
+})
