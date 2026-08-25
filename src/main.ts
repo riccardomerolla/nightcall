@@ -1,5 +1,6 @@
 import { resolve } from "node:path"
 import * as Effect from "effect/Effect"
+import * as Ref from "effect/Ref"
 import * as Schedule from "effect/Schedule"
 import * as Semaphore from "effect/Semaphore"
 import type { FlowEventsShape } from "@llm4ts/flow/FlowEvents"
@@ -73,8 +74,12 @@ const program = Effect.gen(function* () {
       )
     })
   )
+  // Held across beats on purpose: a Ref made inside the beat would forget
+  // every live claim each time and release work that is running.
+  const liveClaims = yield* Ref.make<ReadonlySet<string>>(new Set())
   const beat = heartbeat(hosting, config, loggingEvents, {
     claimMode,
+    liveClaims,
     worker: (intent) =>
       runWorkItem(hosting, azure, intent, config, process.env, loggingEvents),
     epicWorker: (intent) => runEpic(hosting, intent, config, process.env, loggingEvents),

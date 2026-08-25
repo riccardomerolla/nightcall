@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
+import * as Ref from "effect/Ref"
 import * as Effect from "effect/Effect"
 import {
   ProcessResult,
@@ -18,7 +19,7 @@ import {
   type AzureConfig
 } from "../src/Azure.ts"
 import { CompanyConfig, TargetBoard, projectRefOf } from "../src/Config.ts"
-import { claimComment, decide, heartbeat } from "../src/Heartbeat.ts"
+import { claimComment, claimKey, decide, heartbeat } from "../src/Heartbeat.ts"
 import { WorkItemSummary } from "../src/Hosting.ts"
 import { Tags } from "../src/Protocol.ts"
 
@@ -301,6 +302,50 @@ describe("Heartbeat", () => {
         yield* Effect.yieldNow
       }
       assert.deepStrictEqual([...ran].sort(), ["code:41", "qa:43", "review:42"])
+    })
+  )
+
+  it.effect("releases a claim whose worker is gone, and only that one", () =>
+    Effect.gen(function* () {
+      // factory:wip outranks every checkpoint in phaseOf, so an item
+      // wearing it sits in no stage queue: nothing claims it, it counts
+      // against inFlight for ever, and at parallelism 1 the whole company
+      // stops. Only the worker that set the tag ever cleared it, so a
+      // worker that died stranded the item until someone restarted the
+      // daemon — and adding factory:ready by hand does nothing, because
+      // wip outranks that too.
+      const fake = yield* makeFakeProcessExecutor({
+        responses: new Map([
+          ...pollResponses({
+            [Tags.wip]: `[${row(41, `${Tags.planned}; ${Tags.wip}`)},${row(42, `${Tags.coded}; ${Tags.wip}`)}]`
+          }),
+          // Only the abandoned one is released. (The fake answers by
+          // command, so the re-poll sees the same rows; what is under test
+          // is which claims get released, not the second read.)
+          ...tagEditResponses(41, [Tags.planned, Tags.wip], [Tags.planned])
+        ])
+      })
+      const temp = yield* makeFakeTemporaryFiles()
+      const events = yield* makeCollectingFlowEvents
+      const hosting = makeAzureHosting(azure, fake.executor, temp.temporaryFiles, "/anywhere", events)
+      // #42 is being worked by this daemon right now; #41 is not.
+      const liveClaims = yield* Ref.make<ReadonlySet<string>>(new Set([claimKey(target, 42)]))
+
+      yield* heartbeat(hosting, config, events, { claimMode: true, liveClaims })
+      const calls = yield* fake.recorded
+
+      // Exactly one tag write: #41, whose worker is gone. #42 is being
+      // worked right now and must not have its claim pulled out from under
+      // it — releasing a live claim would let a second worker in.
+      const writes = calls.filter((call) => call.argv.includes("--fields"))
+      assert.strictEqual(writes.length, 1)
+      assert.include(writes[0]?.argv ?? [], "41")
+      // And what it writes back no longer carries the claim.
+      assert.isTrue(
+        (writes[0]?.argv ?? []).some(
+          (argument) => argument.startsWith("System.Tags=") && !argument.includes(Tags.wip)
+        )
+      )
     })
   )
 

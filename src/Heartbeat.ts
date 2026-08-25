@@ -46,6 +46,37 @@ export interface HeartbeatDecision {
   readonly throttled: boolean
 }
 
+// Claim keys are `slug#id`: the id alone would collide across boards.
+export const claimKey = (target: TargetBoard, id: number): string => `${target.slug}#${id}`
+
+const releaseStaleClaims = (
+  hosting: HostingShape,
+  snapshots: ReadonlyArray<TargetSnapshot>,
+  options: HeartbeatOptions,
+  say: (message: string) => Effect.Effect<void>
+): Effect.Effect<number> =>
+  Effect.gen(function* () {
+    const live = options.liveClaims
+    if (live === undefined) {
+      return 0
+    }
+    const running = yield* Ref.get(live)
+    let released = 0
+    for (const snapshot of snapshots) {
+      for (const item of snapshot.wip) {
+        const key = claimKey(snapshot.target, item.id)
+        if (!running.has(key)) {
+          yield* Effect.ignore(
+            hosting.editTags(item.ref(projectRefOf(snapshot.target)), [], [Tags.wip])
+          )
+          yield* say(`released stale claim on ${key}: no worker is running it`)
+          released += 1
+        }
+      }
+    }
+    return released
+  })
+
 export const poll = (
   hosting: HostingShape,
   targets: ReadonlyArray<TargetBoard>
@@ -195,6 +226,12 @@ export interface HeartbeatOptions {
   // stage intents run CONCURRENTLY — up to four different items advance
   // one stage each per beat — and the monolithic `worker` is not used.
   readonly stageWorkers?: Readonly<Record<Stage, (intent: ClaimIntent) => Effect.Effect<WorkerReport>>>
+  // The items this daemon has a worker running for right now, keyed by
+  // claimKey. Held across beats by the caller — a Ref made inside the beat
+  // would forget everything each time and release live claims. Unset
+  // disables stale-claim release entirely, which is what the tests want
+  // when they drive one beat by hand.
+  readonly liveClaims?: Ref.Ref<ReadonlySet<string>>
   // Where the ledger lives; no ledger (and no spend throttle) when unset.
   readonly workspaceDir?: string
   // Optional standup work item: a heartbeat with activity posts a summary
@@ -238,7 +275,23 @@ export const heartbeat = (
       options.workspaceDir === undefined ? [] : yield* readLedger(options.workspaceDir)
     let spent = spentToday(ledger, nowIso)
 
-    const snapshots = yield* poll(hosting, config.targets)
+    const polled = yield* poll(hosting, config.targets)
+    // A claim with no keeper is the one state nothing recovers from.
+    // `factory:wip` outranks every checkpoint in phaseOf, so a work item
+    // wearing it belongs to no stage queue: no stage claims it, it counts
+    // against inFlight for ever, and at the default parallelism of one it
+    // stops the whole company. Only the worker that set it ever cleared
+    // it, so a worker that died — a killed fiber, a machine asleep, an
+    // exit down a path that skips the write — stranded the item until
+    // someone restarted the daemon and noticed. Adding `factory:ready` by
+    // hand does nothing either: wip outranks that too.
+    //
+    // The daemon knows exactly which items it has workers for. Anything
+    // else wearing wip is stranded, and saying so costs one tag write.
+    const released = yield* releaseStaleClaims(hosting, polled, options, say)
+    // Re-poll only when something changed, so the beat acts on the truth
+    // rather than waiting for the next one to notice.
+    const snapshots = released === 0 ? polled : yield* poll(hosting, config.targets)
     const decision = decide(snapshots, config, spent)
 
     yield* say(
@@ -307,6 +360,14 @@ export const heartbeat = (
             )
           }
           yield* say(`${stage}: claimed ${intent.target.slug}#${intent.item.id}`)
+          // Registered BEFORE the fork and cleared however the fiber ends —
+          // success, failure, or interruption — so the reaper above can
+          // tell a claim being worked from one whose worker is gone.
+          const key = claimKey(intent.target, intent.item.id)
+          const live = options.liveClaims
+          if (live !== undefined) {
+            yield* Ref.update(live, (running) => new Set([...running, key]))
+          }
           yield* Effect.forkDetach(
             Effect.gen(function* () {
               const report = yield* stageWorkers[stage](intent)
@@ -327,7 +388,17 @@ export const heartbeat = (
                   })
                 )
               }
-            })
+            }).pipe(
+              Effect.ensuring(
+                live === undefined
+                  ? Effect.void
+                  : Ref.update(live, (running) => {
+                      const remaining = new Set(running)
+                      remaining.delete(key)
+                      return remaining
+                    })
+              )
+            )
           )
         })
       )

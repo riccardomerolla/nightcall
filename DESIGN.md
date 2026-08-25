@@ -98,6 +98,14 @@ the CEO, alive while the machine is awake.
   local mirror of GitHub state would drift. Local state is strictly
   per-issue execution state: the persisted llm4ts Plan and trace inside
   the issue's worktree.
+- **Every beat**, a claim with no keeper is released. `factory:wip`
+  outranks every checkpoint in `phaseOf`, so an item wearing it belongs to
+  no stage queue: nothing claims it, it counts against `inFlight`, and at
+  the default parallelism of one it stops the company. The daemon knows
+  which items it has workers for; anything else wearing `wip` is stranded
+  and gets the tag stripped, returning it to its checkpoint. Restart
+  reconciliation (below) only covered the restart case, and re-adding
+  `factory:ready` by hand never worked — `wip` outranks that too.
 - Restart reconciliation, before the first heartbeat, over `factory:wip`
   issues assigned to the bot: worktree + plan → resume via
   `recoverOrCreate`; branch pushed but worktree gone → recreate worktree
