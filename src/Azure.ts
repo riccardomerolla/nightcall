@@ -60,6 +60,12 @@ export interface AzureConfig {
   // Target branch for pull requests when the repo default is not wanted.
   readonly targetBranch: string
   // `az devops invoke` is the only route to the work-item comments API.
+  // It must be `N.N` or `N.N-preview` — never `N.N-preview.N`. The CLI
+  // compares versions with `float(apiVersion.replace('-preview', ''))`,
+  // which turns "7.1-preview.3" into "7.1.3" and dies on it: "could not
+  // convert string to float". Microsoft's own REST docs quote the
+  // resource-suffixed form, so the wrong value is the one closest to hand;
+  // `azApiVersion` trims it rather than letting the CLI report arithmetic.
   readonly apiVersion: string
 }
 
@@ -87,8 +93,16 @@ export const defaultAzureConfig: AzureConfig = {
   azCommand: defaultAzCommand(),
   workItemType: "Task",
   targetBranch: "main",
-  apiVersion: "7.1-preview.3"
+  apiVersion: "7.1-preview"
 }
+
+// The resource version (`.3` in `7.1-preview.3`) cannot be expressed
+// through `az devops invoke` at all — the CLI's own version arithmetic
+// rejects it before the request is built. Dropping it is not a loss: the
+// SDK negotiates a bare `-preview` against the resource's own version, so
+// the service still answers with the resource it would have chosen.
+export const azApiVersion = (raw: string): string =>
+  raw.trim().replace(/^(\d+\.\d+-preview)\.\d+$/, "$1")
 
 // ---------------------------------------------------------------------------
 // HTML round trip

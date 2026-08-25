@@ -10,9 +10,11 @@ import { makeFakeTemporaryFiles } from "@llm4ts/core/TemporaryFiles"
 import { makeCollectingFlowEvents } from "@llm4ts/flow/FlowEvents"
 import {
   adoConfigFor,
+  azApiVersion,
   branchName,
   batchFileHint,
   defaultAzCommand,
+  defaultAzureConfig,
   parseCommand,
   cloneUrl,
   commentsArgs,
@@ -49,7 +51,7 @@ const azure: AzureConfig = {
   azCommand: ["az"],
   workItemType: "Task",
   targetBranch: "main",
-  apiVersion: "7.1-preview.3"
+  apiVersion: "7.1-preview"
 }
 
 const project = ProjectRef.make({ project: "acme", repository: "widgets" })
@@ -187,6 +189,28 @@ describe("Azure DevOps argv", () => {
     assert.match(wiql, /^SELECT \[System\.Id\], /)
     assert.match(wiql, / FROM WorkItems WHERE /)
     assert.match(wiql, / ORDER BY \[System\.Id\] ASC$/)
+  })
+})
+
+describe("Azure DevOps API version", () => {
+  it("drops a resource suffix `az devops invoke` cannot parse", () => {
+    // The CLI compares versions with float(apiVersion.replace('-preview',
+    // '')), so "7.1-preview.3" becomes "7.1.3" and it dies with "could not
+    // convert string to float" before a request is ever built. Microsoft's
+    // REST docs quote exactly that suffixed form, so it is the value an
+    // operator reaches for first.
+    assert.strictEqual(azApiVersion("7.1-preview.3"), "7.1-preview")
+    assert.strictEqual(azApiVersion("6.0-preview.2"), "6.0-preview")
+
+    // Forms the CLI can parse are left exactly as given.
+    assert.strictEqual(azApiVersion("7.1-preview"), "7.1-preview")
+    assert.strictEqual(azApiVersion("7.1"), "7.1")
+    assert.strictEqual(azApiVersion(" 7.1 "), "7.1")
+  })
+
+  it("defaults to a version the CLI accepts", () => {
+    assert.strictEqual(defaultAzureConfig.apiVersion, "7.1-preview")
+    assert.strictEqual(azApiVersion(defaultAzureConfig.apiVersion), defaultAzureConfig.apiVersion)
   })
 })
 

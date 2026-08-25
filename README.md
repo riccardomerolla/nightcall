@@ -83,7 +83,7 @@ are the same thing by the time the daemon reads them.
 | `NIGHTCALL_AZ_BIN`              | `az`                 | escape hatch: the command to launch the Azure CLI, every platform included                      |
 | `NIGHTCALL_ADO_WORK_ITEM_TYPE`  | `Task`               | type created for epic children (`User Story`, `Product Backlog Item`, …)                        |
 | `NIGHTCALL_ADO_TARGET_BRANCH`   | `main`               | pull-request target branch                                                                      |
-| `NIGHTCALL_ADO_API_VERSION`     | `7.1-preview.3`      | API version for the work-item comments resource                                                 |
+| `NIGHTCALL_ADO_API_VERSION`     | `7.1-preview`        | API version for the work-item comments resource; `N.N` or `N.N-preview` only — `az devops invoke` cannot parse a `-preview.N` resource suffix, so one given here is trimmed |
 | `NIGHTCALL_CLAIM`               | off                  | `1` arms claiming and the engineer pipeline                                                     |
 | `NIGHTCALL_HEARTBEAT_SECONDS`   | `120`                | poll interval                                                                                   |
 | `NIGHTCALL_ISSUE_BUDGET_USD`    | `5`                  | per-work-item budget (`factory:budget-N` overrides)                                             |

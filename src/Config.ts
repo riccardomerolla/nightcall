@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
+  azApiVersion,
   defaultAzCommand,
   defaultAzureConfig,
   parseCommand,
@@ -100,7 +101,10 @@ export const azureFromEnv = (
     azCommand: azCommandFrom(env["NIGHTCALL_AZ_BIN"]),
     workItemType: trimmed(env["NIGHTCALL_ADO_WORK_ITEM_TYPE"], defaultAzureConfig.workItemType),
     targetBranch: trimmed(env["NIGHTCALL_ADO_TARGET_BRANCH"], defaultAzureConfig.targetBranch),
-    apiVersion: trimmed(env["NIGHTCALL_ADO_API_VERSION"], defaultAzureConfig.apiVersion)
+    // Normalized, not validated: the resource suffix Microsoft's REST docs
+    // quote (`7.1-preview.3`) is the value an operator will reach for, and
+    // `az devops invoke` cannot carry it — see azApiVersion.
+    apiVersion: azApiVersion(trimmed(env["NIGHTCALL_ADO_API_VERSION"], defaultAzureConfig.apiVersion))
   })
 }
 
