@@ -11,6 +11,7 @@ import { runWorkItem } from "./Engineer.ts"
 import { heartbeat, type ClaimIntent, type Stage, type WorkerReport } from "./Heartbeat.ts"
 import { parseWorkItemRef } from "./Hosting.ts"
 import { runMend, runStage } from "./Stages.ts"
+import { describeError } from "./Surface.ts"
 import { runEpic } from "./TechLead.ts"
 import { Tags } from "./Protocol.ts"
 
@@ -94,7 +95,7 @@ const program = Effect.gen(function* () {
   }).pipe(
     // A failed beat (az missing, network down, throttling) is reported and
     // the daemon stays up: the next beat re-derives everything from tags.
-    Effect.catch((error) => Effect.logWarning(`heartbeat failed: ${error.message}`)),
+    Effect.catch((error) => Effect.logWarning(`heartbeat failed: ${describeError(error)}`)),
     Effect.asVoid
   )
   yield* beat.pipe(

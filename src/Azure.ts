@@ -49,6 +49,11 @@ import {
 export interface AzureConfig {
   // Organization URL, e.g. https://dev.azure.com/acme
   readonly orgUrl: string
+  // The `az` executable to launch. Not always literally "az": Node spawns
+  // without a shell (deliberately — see `run` below), and a shell-less
+  // spawn does not consult PATHEXT, so on Windows, where the Azure CLI
+  // installs as `az.cmd`, a bare "az" is simply not found.
+  readonly azBin: string
   // Work item type created for epic children, e.g. "Task", "User Story".
   readonly workItemType: string
   // Target branch for pull requests when the repo default is not wanted.
@@ -57,8 +62,14 @@ export interface AzureConfig {
   readonly apiVersion: string
 }
 
+// Node's spawn resolves a command against PATH but never appends a PATHEXT
+// extension, so the file has to be named the way it exists on disk.
+export const defaultAzBin = (platform: string = process.platform): string =>
+  platform === "win32" ? "az.cmd" : "az"
+
 export const defaultAzureConfig: AzureConfig = {
   orgUrl: "",
+  azBin: defaultAzBin(),
   workItemType: "Task",
   targetBranch: "main",
   apiVersion: "7.1-preview.3"
@@ -528,17 +539,23 @@ export const makeAzureHosting = (
   workDir: string,
   events: FlowEventsShape
 ): HostingShape => {
+  // No shell, ever. The executor spawns argv directly, so every argument
+  // reaches `az` exactly as built — WIQL operators like `<>` included. Under
+  // a shell those would be redirection, which is why the command printed in
+  // an error is a description of what ran, not something to paste into
+  // PowerShell: pasting it asks a shell to parse text that was deliberately
+  // never given to one.
   const run = (args: ReadonlyArray<string>): Effect.Effect<string, FlowError> =>
-    processExecutor.run(["az", ...args], workDir, {}).pipe(
+    processExecutor.run([config.azBin, ...args], workDir, {}).pipe(
       Effect.mapError((error) =>
-        ProcessError.make({ message: `az ${args.join(" ")}`, detail: error.message })
+        ProcessError.make({ message: `${config.azBin} ${args.join(" ")}`, detail: error.message })
       ),
       Effect.flatMap((result) =>
         result.exitCode === 0
           ? Effect.succeed(output(result))
           : Effect.fail(
               ProcessError.make({
-                message: `az ${args.join(" ")}`,
+                message: `${config.azBin} ${args.join(" ")}`,
                 detail:
                   [...result.stdout, ...result.stderr].join("\n").trim() ||
                   `exit code ${result.exitCode}`

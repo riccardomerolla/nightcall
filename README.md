@@ -80,6 +80,7 @@ are the same thing by the time the daemon reads them.
 | ------------------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
 | `NIGHTCALL_ADO_ORG`             | (required)           | organization URL, e.g. `https://dev.azure.com/acme`                                             |
 | `NIGHTCALL_TARGETS`             | (required)           | comma-separated boards: `project/default-repository`, or bare `project`                         |
+| `NIGHTCALL_AZ_BIN`              | `az` / `az.cmd`      | the `az` executable to launch; defaults per platform                                            |
 | `NIGHTCALL_ADO_WORK_ITEM_TYPE`  | `Task`               | type created for epic children (`User Story`, `Product Backlog Item`, …)                        |
 | `NIGHTCALL_ADO_TARGET_BRANCH`   | `main`               | pull-request target branch                                                                      |
 | `NIGHTCALL_ADO_API_VERSION`     | `7.1-preview.3`      | API version for the work-item comments resource                                                 |
@@ -100,6 +101,35 @@ are the same thing by the time the daemon reads them.
 | `NIGHTCALL_AUTO_MERGE`          | on                   | `off` restores the human merge gate; otherwise the mend stage squash-completes a `factory:review` PR the moment its branch policies pass |
 | `NIGHTCALL_CODER_MODEL`         | (connector default)  | model for every seat, e.g. `gemini-2.5-pro`                                                     |
 | `LLM4TS_CODER`                  | `gemini`             | override the coding CLI (`claude`, `codex`, `opencode`, …)                                      |
+
+## Windows
+
+Two things differ, and both come from the same fact: **Nightcall never runs
+`az` through a shell.** The executor spawns an argv array directly, so every
+argument reaches `az` exactly as built.
+
+- **The executable is `az.cmd`, not `az`.** A shell-less spawn resolves a
+  command against `PATH` but never appends a `PATHEXT` extension, and the
+  Azure CLI installs on Windows as `az.cmd`. That is the default here;
+  `NIGHTCALL_AZ_BIN` overrides it (a full path, for instance).
+- **The `az` command in an error message is a description, not a snippet.**
+  A WIQL query contains `<>`, and pasting one into PowerShell asks a shell
+  to parse text that was deliberately never given to one — PowerShell reads
+  `<>` as redirection and reports *"Missing file specification after
+  redirection operator"*. That error is produced by the paste, not by the
+  daemon. To run the same query by hand, quote the `--wiql` value:
+
+  ```powershell
+  az boards query --wiql "SELECT [System.Id] FROM WorkItems WHERE [System.State] <> 'Closed'" --project P --org https://dev.azure.com/acme --detect false --output json
+  ```
+
+Failures now report their cause beside the command (`↳ …`), so the reason a
+heartbeat failed is in the log rather than something to reconstruct.
+
+The coding seat has the same executable shape: a `gemini` installed through
+npm is `gemini.cmd` on Windows. That one is resolved by `@llm4ts/runner`,
+not here, so if the coder cannot start, `LLM4TS_CODER` accepts an
+alternative and a full path works.
 
 ## Tag protocol
 

@@ -11,6 +11,7 @@ import { makeCollectingFlowEvents } from "@llm4ts/flow/FlowEvents"
 import {
   adoConfigFor,
   branchName,
+  defaultAzBin,
   cloneUrl,
   commentsArgs,
   createWorkItemArgs,
@@ -43,6 +44,7 @@ import { Tags, signature, signed } from "../src/Protocol.ts"
 
 const azure: AzureConfig = {
   orgUrl: "https://dev.azure.com/acme",
+  azBin: "az",
   workItemType: "Task",
   targetBranch: "main",
   apiVersion: "7.1-preview.3"
@@ -170,6 +172,75 @@ describe("Azure DevOps argv", () => {
     assert.notMatch(wiqlFor(project, { state: "all" }), /\[System\.State\] (=|<>)/)
     assert.match(wiqlFor(project, { tags: ["a' OR 1=1 --"] }), /'a'' OR 1=1 --'/)
   })
+})
+
+describe("Azure DevOps executable", () => {
+  it("names the file the way it exists on disk, per platform", () => {
+    // Node spawns without a shell, and a shell-less spawn never appends a
+    // PATHEXT extension. On Windows the Azure CLI installs as `az.cmd`, so
+    // a bare "az" is simply not on disk and the spawn fails before `az`
+    // ever sees the query it was blamed for.
+    assert.strictEqual(defaultAzBin("linux"), "az")
+    assert.strictEqual(defaultAzBin("darwin"), "az")
+    assert.strictEqual(defaultAzBin("win32"), "az.cmd")
+  })
+
+  it.effect("launches the configured executable, not a hardcoded name", () =>
+    Effect.gen(function* () {
+      const windows = { ...azure, azBin: "az.cmd" }
+      const fake = yield* makeFakeProcessExecutor({
+        responses: new Map([
+          [
+            processCommandKey(["az.cmd", ...workItemShowArgs(windows, 7)]),
+            json(workItemJson())
+          ]
+        ])
+      })
+      const temp = yield* makeFakeTemporaryFiles("/fake/tmp")
+      const events = yield* makeCollectingFlowEvents
+      const hosting = makeAzureHosting(
+        windows,
+        fake.executor,
+        temp.temporaryFiles,
+        "/work",
+        events
+      )
+
+      // editTags reads first; the read must have gone to az.cmd.
+      yield* hosting.editTags(ref, [], [])
+      yield* Effect.orElseSucceed(hosting.developmentLinks(ref), () => [])
+      const calls = yield* fake.recorded
+
+      assert.isTrue(calls.every((call) => call.argv[0] === "az.cmd"))
+    })
+  )
+
+  it.effect("names the executable in the error, so the report matches reality", () =>
+    Effect.gen(function* () {
+      const windows = { ...azure, azBin: "az.cmd" }
+      const fake = yield* makeFakeProcessExecutor({
+        responses: new Map([
+          [
+            processCommandKey(["az.cmd", ...workItemShowArgs(windows, 7)]),
+            ProcessResult.make({ stdout: [], exitCode: 9009, stderr: ["not recognized"] })
+          ]
+        ])
+      })
+      const temp = yield* makeFakeTemporaryFiles("/fake/tmp")
+      const events = yield* makeCollectingFlowEvents
+      const hosting = makeAzureHosting(
+        windows,
+        fake.executor,
+        temp.temporaryFiles,
+        "/work",
+        events
+      )
+
+      const error = yield* Effect.flip(hosting.editTags(ref, [Tags.wip], []))
+
+      assert.match(error.message, /^az\.cmd boards work-item show/)
+    })
+  )
 })
 
 describe("Azure DevOps parsing", () => {

@@ -27,6 +27,7 @@ const project = projectRefOf(target)
 
 const azure: AzureConfig = {
   orgUrl: "https://dev.azure.com/acme",
+  azBin: "az",
   workItemType: "Task",
   targetBranch: "main",
   apiVersion: "7.1-preview.3"

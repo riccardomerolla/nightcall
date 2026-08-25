@@ -71,7 +71,7 @@ import {
   signature,
   signed
 } from "./Protocol.ts"
-import { timestampedSurface } from "./Surface.ts"
+import { describeError, timestampedSurface } from "./Surface.ts"
 
 // The staged pipeline: each stage is a small, independently claimable and
 // independently resumable unit that hands off through the tag state
@@ -631,7 +631,9 @@ export const runStage = (
         Effect.tap(() =>
           events.publish(
             Info.make({
-              message: `${stage} stage pipeline error for ${intent.target.slug}#${intent.item.id}: ${error.message}`
+              message:
+                `${stage} stage pipeline error for ${intent.target.slug}#${intent.item.id}: ` +
+                describeError(error)
             })
           )
         )

@@ -25,7 +25,7 @@ import {
 import { nodePlainFileStore } from "@llm4ts/runner/NodePlainFileStore"
 import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
-import { timestampedSurface } from "./Surface.ts"
+import { describeError, timestampedSurface } from "./Surface.ts"
 import { cloneUrl, type AzureConfig } from "./Azure.ts"
 import type { HostingShape, WorkItemRef } from "./Hosting.ts"
 import { resolveWorkspace, unroutableNotice, type Workspace } from "./Workspace.ts"
@@ -592,7 +592,9 @@ export const runWorkItem = (
         Effect.tap(() =>
           events.publish(
             Info.make({
-              message: `engineer pipeline error for ${intent.target.slug}#${intent.item.id}: ${error.message}`
+              message:
+                `engineer pipeline error for ${intent.target.slug}#${intent.item.id}: ` +
+                describeError(error)
             })
           )
         )

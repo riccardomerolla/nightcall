@@ -8,3 +8,14 @@ export const timestampedSurface = (): TerminalSurface =>
   makePlainTerminalSurface((line) =>
     process.stdout.write(`[${new Date().toISOString()}] ${line}\n`)
   )
+
+// A ProcessError's `message` is only the command that was run; the reason it
+// failed is in `detail`. Reporting the message alone leaves an operator
+// staring at a 200-character `az` command line with nothing said about it —
+// which is how a plain "command not found" reads as a mysterious query
+// failure, and sends people off pasting the command into a shell to find out
+// what the daemon already knew.
+export const describeError = (error: { readonly message: string }): string => {
+  const detail = "detail" in error ? String(error.detail).trim() : ""
+  return detail.length === 0 ? error.message : `${error.message}\n  ↳ ${detail}`
+}

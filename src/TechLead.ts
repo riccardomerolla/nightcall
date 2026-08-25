@@ -16,7 +16,7 @@ import {
   runWithBundle
 } from "@llm4ts/runner/FlowRunner"
 import { parseVerbosity } from "@llm4ts/runner/Terminal"
-import { timestampedSurface } from "./Surface.ts"
+import { describeError, timestampedSurface } from "./Surface.ts"
 
 import type { ClaimIntent, WorkerReport } from "./Heartbeat.ts"
 import { projectRefOf, type CompanyConfig } from "./Config.ts"
@@ -195,7 +195,7 @@ export const runEpic = (
         Effect.ignore(
           hosting.writeComment(
             ref,
-            signed(`Epic decomposition failed: ${error.message}. Will retry next beat.`)
+            signed(`Epic decomposition failed: ${describeError(error)}\n\nWill retry next beat.`)
           )
         )
       )
