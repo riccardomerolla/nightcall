@@ -141,7 +141,11 @@ export interface HostingShape {
     branch: string,
     workItemId: number,
     title: string,
-    body: string
+    body: string,
+    // What to merge into. Omitted means the configured default; a child of
+    // an epic targets the epic's branch instead, so the epic accumulates
+    // its children and is merged to the default once, as one piece.
+    target?: string
   ) => Effect.Effect<PullRef, FlowError>
   readonly prChecks: (pr: PullRef) => Effect.Effect<BuildOutcome, FlowError>
   readonly mergePr: (pr: PullRef) => Effect.Effect<void, FlowError>

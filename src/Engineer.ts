@@ -200,6 +200,22 @@ export const resetWorkItemState = (
 // git URL and git's own credential helper authenticates it. That is
 // deliberate: putting a PAT in the URL would write a secret into argv and
 // into .git/config on disk.
+// `git worktree list --porcelain` prints a block per worktree: a `worktree
+// <path>` line, then `HEAD <sha>`, then `branch refs/heads/<name>` for a
+// checked-out branch (a detached one has no branch line). The path of the
+// worktree holding `branch`, if any.
+export const worktreeHoldingBranch = (listing: string, branch: string): string | undefined => {
+  let path: string | undefined
+  for (const line of listing.split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      path = line.slice("worktree ".length).trim()
+    } else if (line.trim() === `branch refs/heads/${branch}`) {
+      return path
+    }
+  }
+  return undefined
+}
+
 export const ensureWorktree = (
   workspaceDir: string,
   azure: AzureConfig,
@@ -225,22 +241,55 @@ export const ensureWorktree = (
       )
     }
     yield* run(["git", "-C", repoDir, "fetch", "origin", "--prune"], workspaceDir)
+    // A worktree's registration outlives its directory. Delete the folder —
+    // by hand, or through a run that died halfway — and git still believes
+    // the branch is checked out there, so `worktree add -B` refuses with
+    // "'factory/item-7' is already used by worktree at ...". Every retry of
+    // that work item then fails the same way, permanently, because nothing
+    // in the ordinary path prunes; only factory:fresh did.
+    yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
     if (!(yield* exists(worktree))) {
+      // Pruning clears registrations whose directory is gone. A directory
+      // that still exists at some OTHER path keeps its claim on the branch,
+      // which happens whenever the path this item resolves to changes — a
+      // repository rename, or an item rerouted to another repository. The
+      // branch is named for the work item, so any worktree holding it is
+      // this item's own leftover.
+      const listing = yield* Effect.orElseSucceed(
+        run(["git", "-C", repoDir, "worktree", "list", "--porcelain"], workspaceDir),
+        () => ""
+      )
+      const holder = worktreeHoldingBranch(listing, workspace.branch)
+      if (holder !== undefined && holder !== worktree) {
+        yield* Effect.ignore(
+          run(["git", "-C", repoDir, "worktree", "remove", "--force", holder], workspaceDir)
+        )
+        yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
+      }
       // A linked branch already exists on the remote and IS the work; a
-      // fresh one starts at origin/HEAD, not the clone's local HEAD, because
-      // fetch never moves local main and an implicit start point would base
-      // new work on however stale the clone happens to be.
-      const remote = `origin/${workspace.branch}`
-      const startPoint =
-        workspace.linked &&
-        (yield* Effect.orElseSucceed(
-          run(["git", "-C", repoDir, "rev-parse", "--verify", remote], workspaceDir).pipe(
-            Effect.as(true)
-          ),
+      // fresh one starts at its base — the epic's branch for a child, so
+      // the child builds on what the epic already holds — and otherwise at
+      // origin/HEAD, not the clone's local HEAD, because fetch never moves
+      // local main and an implicit start point would base new work on
+      // however stale the clone happens to be.
+      const onRemote = (candidate: string) =>
+        Effect.orElseSucceed(
+          run(
+            ["git", "-C", repoDir, "rev-parse", "--verify", `origin/${candidate}`],
+            workspaceDir
+          ).pipe(Effect.as(true)),
           () => false
-        ))
-          ? remote
-          : "origin/HEAD"
+        )
+      const base = workspace.base
+      const startPoint =
+        workspace.linked && (yield* onRemote(workspace.branch))
+          ? `origin/${workspace.branch}`
+          : // A base that is not on the remote yet is not a reason to fail:
+            // the epic's branch may not have been pushed, and origin/HEAD
+            // still produces working code.
+            base !== undefined && (yield* onRemote(base))
+            ? `origin/${base}`
+            : "origin/HEAD"
       yield* run(
         ["git", "-C", repoDir, "worktree", "add", "-B", workspace.branch, worktree, startPoint],
         workspaceDir
@@ -584,7 +633,8 @@ export const runWorkItem = (
               commits,
               gateCommand: gate,
               invoice
-            })
+            }),
+            workspace.base
           )
           // `az repos pr create --work-items` links a PR it creates; this
           // also covers the branch that already had one, and is a no-op when

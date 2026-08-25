@@ -324,7 +324,10 @@ export const prCreateArgs = (
   branch: string,
   workItemId: number,
   title: string,
-  body: string
+  body: string,
+  // Where the work merges to. A child of an epic targets the epic's branch
+  // so the epic accumulates its children and reaches the default once.
+  target?: string
 ): ReadonlyArray<string> => [
   "repos",
   "pr",
@@ -336,7 +339,7 @@ export const prCreateArgs = (
   "--source-branch",
   branchName(branch),
   "--target-branch",
-  branchName(config.targetBranch),
+  branchName(target ?? config.targetBranch),
   "--title",
   title,
   "--description",
@@ -787,7 +790,7 @@ export const makeAzureHosting = (
         run(commentsArgs(config, ref.project, ref.id, "GET")).pipe(Effect.flatMap(parseComments))
       ),
     openPr: (project, branch) => read("ado openPr", findOpenPr(project, branch)),
-    createPr: (project, branch, workItemId, title, body) =>
+    createPr: (project, branch, workItemId, title, body, target) =>
       write(
         "ado createPr",
         // An active PR for the branch already IS the deliverable; a second

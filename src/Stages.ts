@@ -622,7 +622,8 @@ export const runStage = (
               commits,
               gateCommand: gate,
               invoice
-            })
+            }),
+            workspace.base
           )
           // `az repos pr create --work-items` links a PR it creates; this
           // also covers a branch that already had one, and is a no-op when
@@ -695,7 +696,10 @@ export const runMend = (
         const hasWorktree = yield* attempt(run(["git", "-C", worktree, "rev-parse", "HEAD"], workspaceDir))
         if (!hasWorktree) {
           // Recreate from the PUSHED branch — never from origin/HEAD, which
-          // would silently discard the PR's commits.
+          // would silently discard the PR's commits. Prune first: a
+          // registration whose directory is gone still holds the branch,
+          // and `worktree add -B` refuses it — see ensureWorktree.
+          yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
           return yield* attempt(
             run(
               ["git", "-C", repoDir, "worktree", "add", "-B", branch, worktree, `origin/${branch}`],

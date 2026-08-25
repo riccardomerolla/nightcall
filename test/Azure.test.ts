@@ -158,6 +158,19 @@ describe("Azure DevOps argv", () => {
     ])
     // "Closes #N" has no meaning on Azure DevOps; --work-items is the link.
     assert.deepStrictEqual(create.slice(15, 17), ["--work-items", "7"])
+    // A child of an epic merges into the EPIC's branch, not the default:
+    // the epic branch accumulates its children and reaches main once, as
+    // one reviewable piece.
+    const child = prCreateArgs(
+      azure,
+      project,
+      "factory/item-7",
+      7,
+      "T",
+      "B",
+      "refs/heads/feature/importer"
+    )
+    assert.deepStrictEqual(child.slice(9, 11), ["--target-branch", "feature/importer"])
     assert.deepStrictEqual(createWorkItemArgs(azure, project, "T", "B", []).slice(5, 9), [
       "--type",
       "Task",

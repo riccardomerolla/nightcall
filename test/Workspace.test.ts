@@ -168,8 +168,15 @@ describe("Workspace resolution", () => {
         _tag: "Routed",
         // The epic's repository — but the child's OWN branch. Sharing the
         // epic's branch would put every child on one ref, and Azure DevOps
-        // answers five pull requests from one source ref with one PR.
-        workspace: { repository: "gears", branch: "factory/item-7", linked: false }
+        // answers five pull requests from one source ref with one PR. The
+        // epic's branch is the BASE instead: cut from it, merged back into
+        // it, so the epic accumulates its children and ships as one piece.
+        workspace: {
+          repository: "gears",
+          branch: "factory/item-7",
+          linked: false,
+          base: "feature/importer"
+        }
       })
       // The child was asked first, then its parent.
       assert.deepStrictEqual([...(yield* Ref.get(asked))], [7, 3])
@@ -202,7 +209,12 @@ describe("Workspace resolution", () => {
 
       assert.deepStrictEqual(routing, {
         _tag: "Routed",
-        workspace: { repository: "gears", branch: "factory/item-7", linked: false }
+        workspace: {
+          repository: "gears",
+          branch: "factory/item-7",
+          linked: false,
+          base: "feature/importer"
+        }
       })
     })
   )

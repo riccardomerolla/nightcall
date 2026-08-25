@@ -30,7 +30,10 @@ import { describeError } from "./Surface.ts"
 // The repository is inherited; the branch is NOT. Handing every child the
 // epic's branch would put five concurrent engineers on one branch, opening
 // five pull requests from the same source ref — which Azure DevOps answers
-// by giving them all the same pull request.
+// by giving them all the same pull request. What the epic's branch becomes
+// instead is the child's BASE: each child is cut from it and its pull
+// request targets it, so the epic branch accumulates the whole epic and is
+// reviewed and merged as one piece, which is what an epic branch is for.
 //
 // A fourth answer has to exist and did not: "the board would not tell us".
 // A failed lookup used to collapse into case 2 or 3, so a work item with a
@@ -46,6 +49,12 @@ export interface Workspace {
   // Whether a human designated this branch. Nightcall must not delete or
   // force-reset a branch it did not create.
   readonly linked: boolean
+  // What this branch is cut from and merges back into. Set only when the
+  // work belongs inside something larger: a child of an epic branches from
+  // the epic's branch and its pull request targets it, so the epic branch
+  // accumulates the whole epic and is reviewed and merged as one piece.
+  // Unset means the repository's own default, via NIGHTCALL_ADO_TARGET_BRANCH.
+  readonly base?: string
 }
 
 // Routed: work it here. Unroutable: a human must act, and the notice says
@@ -73,7 +82,12 @@ const attempt = <A>(
 
 type ParentRepository =
   | { readonly _tag: "None" }
-  | { readonly _tag: "Repository"; readonly repository: string }
+  | {
+      readonly _tag: "Repository"
+      readonly repository: string
+      // The epic's own branch, which its children build on top of.
+      readonly base: string
+    }
   | { readonly _tag: "Undetermined"; readonly detail: string }
 
 // The repository the item's parent epic is worked in, if it has one.
@@ -122,7 +136,7 @@ const parentRepository = (
           _tag: "Undetermined",
           detail: `parent #${parentId} repository ${linked.repositoryId}: ${repository.failure}`
         }
-      : { _tag: "Repository", repository: repository.value.name }
+      : { _tag: "Repository", repository: repository.value.name, base: linked.value }
   })
 
 // Development links carry repository GUIDs, so the name has to be resolved
@@ -168,7 +182,8 @@ export const resolveWorkspace = (
             workspace: {
               repository: parent.repository,
               branch: branchFor(item.id),
-              linked: false
+              linked: false,
+              base: parent.base
             }
           }
     }
