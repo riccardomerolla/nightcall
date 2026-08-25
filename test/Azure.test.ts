@@ -177,14 +177,11 @@ describe("Azure DevOps argv", () => {
 })
 
 describe("Azure DevOps executable", () => {
-  it("names the file the way it exists on disk, per platform", () => {
-    // Node spawns without a shell, and a shell-less spawn never appends a
-    // PATHEXT extension. On Windows the Azure CLI installs as `az.cmd`, so
-    // a bare "az" is simply not on disk and the spawn fails before `az`
-    // ever sees the query it was blamed for.
-    assert.deepStrictEqual([...defaultAzCommand("linux")], ["az"])
-    assert.deepStrictEqual([...defaultAzCommand("darwin")], ["az"])
-    assert.deepStrictEqual([...defaultAzCommand("win32")], ["az.cmd"])
+  it("says `az` on every platform", () => {
+    // Windows needs no special name here: @llm4ts/runner resolves `az`
+    // through PATHEXT and runs the batch file it finds, which is the same
+    // thing a shell does for a human typing `az` at a prompt.
+    assert.deepStrictEqual([...defaultAzCommand()], ["az"])
   })
 
   it("reads an override as argv, keeping a quoted path with spaces whole", () => {
@@ -199,15 +196,12 @@ describe("Azure DevOps executable", () => {
   })
 
   it("turns Node's spawn EINVAL into something an operator can act on", () => {
-    // Node refuses to spawn a batch file without a shell and says only
-    // "spawn EINVAL", which names neither the cause nor a way out.
-    const hint = batchFileHint(["az.cmd"], "az.cmd failed: spawn EINVAL")
+    // "spawn EINVAL" names neither the cause nor a way out. It can only
+    // reach an operator now on a runner too old to run a batch file.
+    const hint = batchFileHint("az failed: spawn EINVAL")
     assert.include(hint, "batch file")
-    assert.include(hint, "NIGHTCALL_AZ_BIN")
-    assert.include(hint, "azure.cli")
-    // Not every failure of a batch file is that failure.
-    assert.strictEqual(batchFileHint(["az.cmd"], "command not found"), "")
-    assert.strictEqual(batchFileHint(["az"], "spawn EINVAL"), "")
+    assert.include(hint, "0.13.1")
+    assert.strictEqual(batchFileHint("command not found"), "")
   })
 
   it.effect("launches the configured executable, not a hardcoded name", () =>

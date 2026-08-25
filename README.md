@@ -80,7 +80,7 @@ are the same thing by the time the daemon reads them.
 | ------------------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
 | `NIGHTCALL_ADO_ORG`             | (required)           | organization URL, e.g. `https://dev.azure.com/acme`                                             |
 | `NIGHTCALL_TARGETS`             | (required)           | comma-separated boards: `project/default-repository`, or bare `project`                         |
-| `NIGHTCALL_AZ_BIN`              | `az` / `az.cmd`      | the `az` executable to launch; defaults per platform                                            |
+| `NIGHTCALL_AZ_BIN`              | `az`                 | escape hatch: the command to launch the Azure CLI, every platform included                      |
 | `NIGHTCALL_ADO_WORK_ITEM_TYPE`  | `Task`               | type created for epic children (`User Story`, `Product Backlog Item`, …)                        |
 | `NIGHTCALL_ADO_TARGET_BRANCH`   | `main`               | pull-request target branch                                                                      |
 | `NIGHTCALL_ADO_API_VERSION`     | `7.1-preview.3`      | API version for the work-item comments resource                                                 |
@@ -104,43 +104,46 @@ are the same thing by the time the daemon reads them.
 
 ## Windows
 
-Two things differ, and both come from the same fact: **Nightcall never runs
-`az` through a shell.** The executor spawns an argv array directly, so every
-argument reaches `az` exactly as built.
+**Nothing to configure.** `az` is the command on Windows exactly as it is on
+Linux and macOS, and `NIGHTCALL_AZ_BIN` should stay unset. Requires
+`@llm4ts/runner` 0.13.1 or newer.
 
-- **The Azure CLI is not an executable on Windows.** It installs as
-  `az.cmd`, a batch file, and Node refuses to spawn `.cmd`/`.bat` without a
-  shell — you get `spawn EINVAL`. (A shell-less spawn also never appends a
-  `PATHEXT` extension, so a bare `az` is not found either.) Point
-  `NIGHTCALL_AZ_BIN` at the interpreter the batch file itself runs:
+That took a fix, because Windows installs the Azure CLI as `az.cmd`, a batch
+file, and Node's `spawn` neither appends a `PATHEXT` extension to a bare name
+nor will start a `.cmd` at all (`spawn EINVAL`, a CVE-2024-27980 mitigation).
+Typing `az` in PowerShell works because a shell does both of those things for
+you. So `@llm4ts/runner` does them too: it resolves the name through `PATHEXT`
+and runs a batch file through `cmd.exe /d /s /c` with every argument quoted
+for it. An `.exe` or an absolute path is still spawned directly, untouched.
 
-  ```dosini
-  NIGHTCALL_AZ_BIN="C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe" -Im azure.cli
-  ```
+Quoting is the part that has to be right, and it is why turning on Node's
+`shell: true` would have been the wrong fix: that option joins argv with bare
+spaces, so a WIQL query's `<>` would reach `cmd.exe` as redirection.
 
-  It is a command, not just a program name — leading arguments are part of
-  it, and a quoted path with spaces stays whole. If your install lives
-  elsewhere, open `wbin\az.cmd` in it: the last line is exactly the
-  interpreter and arguments to copy. Nightcall says this in the error too,
-  rather than leaving `spawn EINVAL` to be decoded.
+Which is also the answer to the one thing that still surprises people:
+
 - **The `az` command in an error message is a description, not a snippet.**
-  A WIQL query contains `<>`, and pasting one into PowerShell asks a shell
-  to parse text that was deliberately never given to one — PowerShell reads
-  `<>` as redirection and reports *"Missing file specification after
-  redirection operator"*. That error is produced by the paste, not by the
-  daemon. To run the same query by hand, quote the `--wiql` value:
+  Pasting one into PowerShell asks a shell to parse text that was
+  deliberately never given to one — PowerShell reads WIQL's `<>` as
+  redirection and reports *"Missing file specification after redirection
+  operator"*. That error is produced by the paste, not by the daemon. To run
+  the same query by hand, quote the `--wiql` value:
 
   ```powershell
   az boards query --wiql "SELECT [System.Id] FROM WorkItems WHERE [System.State] <> 'Closed'" --project P --org https://dev.azure.com/acme --detect false --output json
   ```
 
-Failures now report their cause beside the command (`↳ …`), so the reason a
+Failures report their cause beside the command (`↳ …`), so the reason a
 heartbeat failed is in the log rather than something to reconstruct.
 
-The coding seat has the same executable shape: a `gemini` installed through
-npm is `gemini.cmd` on Windows. That one is resolved by `@llm4ts/runner`,
-not here, so if the coder cannot start, `LLM4TS_CODER` accepts an
-alternative and a full path works.
+`NIGHTCALL_AZ_BIN` remains as an escape hatch for an install that is not on
+`PATH`, and it takes a whole command, not just a program name: leading
+arguments are part of it and a quoted path with spaces stays whole.
+
+The coding seat has the same executable shape — a `gemini` installed through
+npm is `gemini.cmd` — and is resolved by the same runner code, so it needs
+nothing either. `LLM4TS_CODER` accepts an alternative or a full path if you
+want a different one.
 
 ## Tag protocol
 

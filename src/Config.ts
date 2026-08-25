@@ -71,12 +71,9 @@ const positiveOr = (raw: string | undefined, fallback: number): number => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-const azCommandFrom = (
-  raw: string | undefined,
-  platform: string
-): ReadonlyArray<string> => {
+const azCommandFrom = (raw: string | undefined): ReadonlyArray<string> => {
   const parsed = parseCommand(raw ?? "")
-  return parsed.length === 0 ? defaultAzCommand(platform) : parsed
+  return parsed.length === 0 ? defaultAzCommand() : parsed
 }
 
 const trimmed = (raw: string | undefined, fallback: string): string => {
@@ -88,8 +85,7 @@ const trimmed = (raw: string | undefined, fallback: string): string => {
 // would point the company at somebody else's board. A trailing slash is
 // stripped so every derived URL composes cleanly.
 export const azureFromEnv = (
-  env: Record<string, string | undefined>,
-  platform: string = process.platform
+  env: Record<string, string | undefined>
 ): Effect.Effect<AzureConfig, ConfigError> => {
   const orgUrl = (env["NIGHTCALL_ADO_ORG"] ?? "").trim().replace(/\/+$/, "")
   if (orgUrl.length === 0) {
@@ -101,7 +97,7 @@ export const azureFromEnv = (
   }
   return Effect.succeed({
     orgUrl,
-    azCommand: azCommandFrom(env["NIGHTCALL_AZ_BIN"], platform),
+    azCommand: azCommandFrom(env["NIGHTCALL_AZ_BIN"]),
     workItemType: trimmed(env["NIGHTCALL_ADO_WORK_ITEM_TYPE"], defaultAzureConfig.workItemType),
     targetBranch: trimmed(env["NIGHTCALL_ADO_TARGET_BRANCH"], defaultAzureConfig.targetBranch),
     apiVersion: trimmed(env["NIGHTCALL_ADO_API_VERSION"], defaultAzureConfig.apiVersion)

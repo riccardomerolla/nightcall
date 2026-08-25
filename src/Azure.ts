@@ -50,13 +50,10 @@ export interface AzureConfig {
   // Organization URL, e.g. https://dev.azure.com/acme
   readonly orgUrl: string
   // How to launch the Azure CLI, as argv — a program plus any leading
-  // arguments. Not just a name, because on Windows the CLI is not an
-  // executable at all: it installs as `az.cmd`, a batch file, and Node
-  // refuses to spawn `.cmd`/`.bat` without a shell (spawn EINVAL, the
-  // CVE-2024-27980 mitigation). A shell is not the answer — Node's
-  // `shell: true` joins argv with bare spaces and no quoting, which would
-  // hand WIQL's `<>` to cmd.exe as redirection. Pointing this at the real
-  // interpreter is: e.g. the CLI's bundled python plus `-Im azure.cli`.
+  // arguments, so an install that needs an interpreter can say so. `az` is
+  // right on every platform: llm4ts's executor resolves it through PATHEXT
+  // and runs the batch file Windows installs, which is the same thing a
+  // shell does for a human at a prompt.
   readonly azCommand: ReadonlyArray<string>
   // Work item type created for epic children, e.g. "Task", "User Story".
   readonly workItemType: string
@@ -66,11 +63,7 @@ export interface AzureConfig {
   readonly apiVersion: string
 }
 
-// Node's spawn resolves a command against PATH but never appends a PATHEXT
-// extension, so the file has to be named the way it exists on disk.
-export const defaultAzCommand = (
-  platform: string = process.platform
-): ReadonlyArray<string> => (platform === "win32" ? ["az.cmd"] : ["az"])
+export const defaultAzCommand = (): ReadonlyArray<string> => ["az"]
 
 // An operator-supplied command is argv, not a sentence: split on whitespace
 // but keep quoted runs together, so a Windows path with spaces survives.
@@ -79,17 +72,15 @@ export const parseCommand = (raw: string): ReadonlyArray<string> =>
     .map((token) => token.replace(/^"(.*)"$/, "$1"))
     .filter((token) => token.length > 0)
 
-// Node refuses to spawn a batch file without a shell. The message it gives
-// for that is `spawn EINVAL`, which says nothing an operator can act on.
-export const batchFileHint = (command: ReadonlyArray<string>, detail: string): string => {
-  const program = command[0] ?? ""
-  return /EINVAL/.test(detail) && /\.(cmd|bat)$/i.test(program)
-    ? `\n${program} is a batch file, and Node cannot spawn one without a shell. ` +
-        "Point NIGHTCALL_AZ_BIN at a real executable — for a default Windows " +
-        'install of the Azure CLI that is: "C:\\Program Files\\Microsoft SDKs\\' +
-        'Azure\\CLI2\\python.exe" -Im azure.cli'
+// A batch file that will not spawn means the runtime is older than the
+// llm4ts release that taught the executor to run one.
+export const batchFileHint = (detail: string): string =>
+  /EINVAL/.test(detail)
+    ? "\nspawn EINVAL means a batch file could not be launched. Windows needs " +
+      "@llm4ts/runner 0.13.1 or newer, which resolves PATHEXT and runs the " +
+      "batch file through cmd.exe; NIGHTCALL_AZ_BIN can name an interpreter " +
+      "directly if that is not an option."
     : ""
-}
 
 export const defaultAzureConfig: AzureConfig = {
   orgUrl: "",
@@ -575,7 +566,7 @@ export const makeAzureHosting = (
       Effect.mapError((error) =>
         ProcessError.make({
           message: `${shown} ${args.join(" ")}`,
-          detail: error.message + batchFileHint(config.azCommand, error.message)
+          detail: error.message + batchFileHint(error.message)
         })
       ),
       Effect.flatMap((result) =>
