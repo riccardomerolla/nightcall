@@ -30,7 +30,7 @@ const azure: AzureConfig = {
   azCommand: ["az"],
   workItemType: "Task",
   targetBranch: "main",
-  apiVersion: "7.1-preview.3"
+  apiVersion: "7.1-preview"
 }
 
 const config = CompanyConfig.make({
