@@ -258,6 +258,15 @@ export const ensureWorktree = (
       )
     }
     yield* run(["git", "-C", repoDir, "fetch", "origin", "--prune"], workspaceDir)
+    // The clone's own checkout holds whatever branch `git clone` checked
+    // out, and git refuses to update a branch that ANY worktree has out —
+    // the primary one included: "cannot force update the branch 'x' used
+    // by worktree at ...". So a work item whose Development link names the
+    // repository's default branch could never get a worktree, and deleting
+    // .factory made it worse, because a fresh clone checks that branch out
+    // again. `--force` does not cover this one; detaching does, and costs
+    // nothing: no work ever happens in the primary checkout.
+    yield* Effect.ignore(run(["git", "-C", repoDir, "checkout", "--detach"], workspaceDir))
     // A worktree's registration outlives its directory. Delete the folder —
     // by hand, or through a run that died halfway — and git still believes
     // the branch is checked out there, so `worktree add -B` refuses with

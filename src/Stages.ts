@@ -733,6 +733,9 @@ export const runMend = (
     const prepared = yield* gitLock.withPermits(1)(
       Effect.gen(function* () {
         yield* run(["git", "-C", repoDir, "fetch", "origin", "--prune"], workspaceDir)
+        // See ensureWorktree: the primary checkout holds a branch, and no
+        // worktree can take a branch another worktree has out.
+        yield* Effect.ignore(run(["git", "-C", repoDir, "checkout", "--detach"], workspaceDir))
         const hasWorktree = yield* attempt(run(["git", "-C", worktree, "rev-parse", "HEAD"], workspaceDir))
         if (!hasWorktree) {
           // Recreate from the PUSHED branch — never from origin/HEAD, which
