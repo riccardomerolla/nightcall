@@ -1,2 +1,7 @@
 node_modules/
 .factory/
+# Local configuration and credentials. `.env.example` is the tracked
+# template; `.env` is yours and never leaves the machine.
+.env
+.env.*
+!.env.example

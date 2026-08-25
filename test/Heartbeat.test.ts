@@ -305,7 +305,9 @@ describe("Heartbeat", () => {
       assert.include(commentCall?.argv ?? [], "--in-file")
       const written = yield* temp.files
       assert.include(written.at(-1)?.contents ?? "", "Nightcall")
-      // No credential is ever forwarded to the CLI.
+      // Nightcall adds no variables of its own to any child: `az` reads
+      // its credential from the inherited environment, and nothing this
+      // module builds can put one somewhere it would be logged.
       assert.isTrue(allCalls.every((call) => Object.keys(call.envVars).length === 0))
     })
   )

@@ -217,8 +217,10 @@ Enforced by the Chief of Staff — an LLM never reasons about its own budget.
 - v1: the CEO's own Azure DevOps credential, held **by the `az` CLI**, not
   by Nightcall — `az devops login`, or `AZURE_DEVOPS_EXT_PAT` which `az`
   reads for itself. Nightcall never accepts, stores, or forwards a token,
-  and passes an empty environment to every process it launches, so a PAT
-  cannot reach argv, a log line, a trace, or a persisted plan. Git
+  and adds no variables of its own to the processes it launches. Those
+  processes inherit the daemon's environment — which is precisely how `az`
+  finds its own credential — so a PAT lives in the environment and never
+  in argv, a log line, a trace, or a persisted plan. Git
   authenticates the clone through the operator's credential helper for the
   same reason: a PAT embedded in a remote URL would land in `.git/config`.
 - **Every** bot comment carries a signature line (`— Nightcall 🌙`).

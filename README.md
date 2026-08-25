@@ -30,18 +30,37 @@ gemini --version                         # the coding seat
 ```
 
 Nightcall never reads, stores, or forwards a credential: `az` owns the
-Azure DevOps PAT and git's credential helper authenticates the clone, so
-no token can reach argv, a log line, a trace, or a persisted plan. Make
-sure `git clone https://dev.azure.com/<org>/<project>/_git/<repo>` works
+Azure DevOps PAT and git's credential helper authenticates the clone.
+Nightcall adds no variables of its own to any process it launches — they
+inherit its environment, which is how `az` finds its credential — so a
+token stays in the environment and never reaches argv, a log line, a
+trace, or a persisted plan. Make sure
+`git clone https://dev.azure.com/<org>/<project>/_git/<repo>` works
 non-interactively before arming the daemon.
 
 ## Running
+
+```bash
+cp .env.example .env     # edit the two required values
+pnpm start
+```
+
+`pnpm start` loads `.env` if it is present (Node's own `--env-file-if-exists`;
+no dependency, no parser of ours) and starts without one if it is not, so
+plain environment variables still work exactly as before:
 
 ```bash
 NIGHTCALL_ADO_ORG=https://dev.azure.com/acme \
 NIGHTCALL_TARGETS=project/repository \
 pnpm start
 ```
+
+`.env` is gitignored, and `.env.example` is the tracked template that
+documents every variable. Anything in `.env` is inherited by the processes
+Nightcall launches (`az`, `git`, `gemini`) — that is how `az` picks up
+`AZURE_DEVOPS_EXT_PAT` if you keep it there rather than running
+`az devops login`, and it is also why nothing belongs in `.env` that you
+would not hand to those three programs.
 
 A target is a **board**, not a repository. `project/repository` names a
 board plus the repository to use for work items that do not say otherwise;
@@ -53,6 +72,9 @@ Observe mode is the default: the daemon polls `factory:ready` /
 `factory:wip` and logs what it would claim, writing nothing. Arm the full
 pipeline (claim → Tech Lead triage → Engineer → QA → PR) with
 `NIGHTCALL_CLAIM=1`.
+
+Every variable below can live in `.env` or in the environment; the two
+are the same thing by the time the daemon reads them.
 
 | Variable                        | Default              | Meaning                                                                                       |
 | ------------------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
