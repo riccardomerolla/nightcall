@@ -334,12 +334,16 @@ describe("Heartbeat", () => {
       yield* heartbeat(hosting, config, events, { claimMode: true, liveClaims })
       const calls = yield* fake.recorded
 
-      // Exactly one tag write: #41, whose worker is gone. #42 is being
-      // worked right now and must not have its claim pulled out from under
-      // it — releasing a live claim would let a second worker in.
+      // Only #41 is written to: its worker is gone. #42 is being worked
+      // right now and must not have its claim pulled out from under it —
+      // releasing a live claim would let a second worker in.
+      //
+      // Two writes, not one: the fake answers every read identically, so
+      // the edit's read-back always looks like the write was ignored and
+      // its single retry fires. Both name the same item.
       const writes = calls.filter((call) => call.argv.includes("--fields"))
-      assert.strictEqual(writes.length, 1)
-      assert.include(writes[0]?.argv ?? [], "41")
+      assert.strictEqual(writes.length, 2)
+      assert.isTrue(writes.every((call) => call.argv.includes("41")))
       // And what it writes back no longer carries the claim.
       assert.isTrue(
         (writes[0]?.argv ?? []).some(

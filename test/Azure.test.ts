@@ -434,13 +434,21 @@ describe("Azure DevOps hosting", () => {
       yield* hosting.editTags(ref, [], [])
       const calls = yield* fake.recorded
 
-      // Read, write, and read BACK. The tag field is the whole state
-      // machine: an add that lands while its removes do not leaves the
-      // item wearing a checkpoint it has passed and a claim nobody holds,
-      // which no stage will ever pick up. The read-back is what turns that
-      // from silence into a logged warning.
-      assert.strictEqual(calls.length, 3)
-      assert.isTrue(calls.some((call) => call.argv.includes("System.Tags=urgent; factory:wip")))
+      // Read, write, read BACK — then once more. The tag field is the
+      // whole state machine: an add that lands while its removes do not
+      // leaves the item wearing a checkpoint it has passed and a claim
+      // nobody holds, which no stage will ever pick up. So the edit
+      // verifies itself and retries once from a fresh read.
+      //
+      // The fake answers every read identically, so the read-back always
+      // looks like the write was ignored and the retry always fires: six
+      // calls, two of them writes. Pinned exactly because the retry being
+      // bounded at ONE is the property that matters — a self-verifying
+      // write that retries on disagreement is a loop if nothing stops it.
+      const writes = calls.filter((call) => call.argv.includes("--fields"))
+      assert.strictEqual(calls.length, 6)
+      assert.strictEqual(writes.length, 2)
+      assert.isTrue(writes.every((call) => call.argv.includes("System.Tags=urgent; factory:wip")))
     })
   )
 
