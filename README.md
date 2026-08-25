@@ -171,11 +171,25 @@ work item where its code is:
    work goes; the factory commits on that branch and opens the PR from it.
    It is never deleted or force-reset by `factory:fresh`, because the
    factory did not create it.
-2. **The board's default repository** — a fresh `factory/item-<n>` off
+2. **Its parent epic's Branch link** — that repository, on the child's own
+   `factory/item-<n>` cut from the epic's branch, with the pull request
+   targeting the epic's branch rather than the default. A decomposed child
+   has no link of its own; it is how the epic gets built, so it belongs in
+   the epic's repository and stacks on its branch, and the epic branch
+   accumulates the whole epic to be reviewed and merged as one piece.
+   (The repository is inherited, never the branch: five children sharing
+   one branch would be five pull requests from one source ref, which Azure
+   DevOps answers with a single pull request.)
+3. **The board's default repository** — a fresh `factory/item-<n>` off
    `origin/HEAD`, which is then **linked back** to the work item so the
    board's Development section shows the work.
-3. **Neither** — the work item is not actionable. It goes to
-   `factory:needs-info` with a comment explaining the two ways to fix it.
+4. **Neither** — the work item is not actionable. It goes to
+   `factory:needs-info` with a comment explaining the ways to fix it.
+
+A lookup that *fails* is none of these four: the daemon logs
+`cannot route — …`, leaves every tag alone, and tries again next beat.
+Not knowing where the code lives is never written onto the board as an
+answer about where it lives.
 
 Nightcall links back at the moments the flow produces something linkable:
 the **branch** the first time it reaches the remote (code stage, or QA in

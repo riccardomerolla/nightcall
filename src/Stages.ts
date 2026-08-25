@@ -68,6 +68,7 @@ import {
   doneReview,
   fail,
   isFresh,
+  restart,
   signature,
   signed
 } from "./Protocol.ts"
@@ -127,14 +128,32 @@ export const runStage = (
     const planPath = join(stateDir, `item-${intent.item.id}-plan.md`)
     const planCommentPath = join(stateDir, `item-${intent.item.id}-plan-comment.json`)
 
-    if (stage === "plan" && isFresh(intent.item.tags)) {
+    if (isFresh(intent.item.tags)) {
       yield* resetWorkItemState(workspaceDir, intent, workspace, planPath)
-      yield* Effect.ignore(hosting.editTags(ref, [], [Tags.fresh]))
-      yield* tell(
-        hosting,
-        ref,
-        "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded."
-      )
+      if (stage === "plan") {
+        yield* Effect.ignore(hosting.editTags(ref, [], [Tags.fresh]))
+        yield* tell(
+          hosting,
+          ref,
+          "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan discarded."
+        )
+      } else {
+        // Only the plan stage was reading this tag, so an item stuck at
+        // planned/coded/reviewed — the state an operator actually reaches
+        // for factory:fresh in — was claimed by a later stage that never
+        // looked at it, and the reset never ran. A later stage cannot
+        // start over in place either: its input is the plan and branch the
+        // reset just discarded. Send the item back to the front instead.
+        yield* Effect.ignore(hosting.editTags(ref, restart.add, restart.remove))
+        yield* tell(
+          hosting,
+          ref,
+          "Starting from scratch as requested (factory:fresh): prior branch, worktree, and " +
+            `plan discarded at the ${stage} stage. Back to \`factory:ready\` — the next beat ` +
+            "plans this from nothing."
+        )
+        return { outcome: "Advanced" as const, costUsd: 0 }
+      }
     }
 
     const worktree = yield* ensureWorktree(workspaceDir, azure, intent, workspace, gitLock)
@@ -680,6 +699,27 @@ export const runMend = (
       return { outcome: "Failed" as const, costUsd: 0 }
     }
     const workspace = routing.workspace
+    // An item at factory:review is claimed by mend, so this is the stage
+    // that sees factory:fresh on anything with an open pull request. Same
+    // answer as the other stages: reset and go back to the front. The pull
+    // request is left alone — closing one is not this tag's job.
+    if (isFresh(intent.item.tags)) {
+      const planPath = join(
+        workspaceDir,
+        "state",
+        `${intent.target.project}__${workspace.repository}`,
+        `item-${intent.item.id}-plan.md`
+      )
+      yield* resetWorkItemState(workspaceDir, intent, workspace, planPath)
+      yield* Effect.ignore(hosting.editTags(ref, restart.add, restart.remove))
+      yield* tell(
+        hosting,
+        ref,
+        "Starting from scratch as requested (factory:fresh): prior branch, worktree, and plan " +
+          "discarded. Back to `factory:ready`. Any open pull request is left for you to close."
+      )
+      return { outcome: "Advanced" as const, costUsd: 0 }
+    }
     const { repoDir, worktree } = workItemPaths(workspaceDir, intent, workspace.repository)
     const branch = workspace.branch
     const gate = environment["NIGHTCALL_GATE"]?.trim()

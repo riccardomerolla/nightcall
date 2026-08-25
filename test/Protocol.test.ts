@@ -7,6 +7,7 @@ import {
   fail,
   isEpic,
   phaseOf,
+  restart,
   signed
 } from "../src/Protocol.ts"
 
@@ -52,5 +53,22 @@ describe("Protocol", () => {
     assert.deepStrictEqual([...fail.remove], [Tags.wip, Tags.review])
     assert.strictEqual(branchFor(42), "factory/item-42")
     assert.strictEqual(signed("Done.\n"), "Done.\n\n— Nightcall 🌙")
+  })
+})
+
+describe("factory:fresh", () => {
+  it("clears every checkpoint so a stuck item starts from the front", () => {
+    // Only the plan stage read this tag, so an item stuck at planned,
+    // coded, or reviewed — the state an operator actually reaches for
+    // factory:fresh in — was claimed by a later stage that never looked at
+    // it. Restarting has to strip whichever checkpoint it stopped on, or
+    // the next beat claims it for that same stage again.
+    for (const checkpoint of [Tags.planned, Tags.coded, Tags.reviewed, Tags.review, Tags.failed]) {
+      assert.include(restart.remove, checkpoint)
+    }
+    // The claim and the tag itself go too: the reset has been applied.
+    assert.include(restart.remove, Tags.wip)
+    assert.include(restart.remove, Tags.fresh)
+    assert.deepStrictEqual([...restart.add], [Tags.ready])
   })
 })

@@ -180,6 +180,23 @@ export const resetWorkItemState = (
     )
     yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
     if (!workspace.linked) {
+      // `git branch -D` refuses a branch that is checked out in ANY
+      // worktree, and prune only clears registrations whose directory is
+      // gone. A live worktree at some other path therefore survived the
+      // reset, kept the branch, and left `worktree add -B` failing on
+      // every retry — with factory:fresh, the documented cure, reporting
+      // nothing, because each step here is best-effort.
+      const listing = yield* Effect.orElseSucceed(
+        run(["git", "-C", repoDir, "worktree", "list", "--porcelain"], workspaceDir),
+        () => ""
+      )
+      const holder = worktreeHoldingBranch(listing, workspace.branch)
+      if (holder !== undefined) {
+        yield* Effect.ignore(
+          run(["git", "-C", repoDir, "worktree", "remove", "--force", holder], workspaceDir)
+        )
+        yield* Effect.ignore(run(["git", "-C", repoDir, "worktree", "prune"], workspaceDir))
+      }
       yield* Effect.ignore(
         run(["git", "-C", repoDir, "branch", "-D", workspace.branch], workspaceDir)
       )

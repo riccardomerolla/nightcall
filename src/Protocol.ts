@@ -134,6 +134,24 @@ export const bounce = Transition.make({
   add: [Tags.needsInfo],
   remove: [Tags.ready, Tags.wip]
 })
+// factory:fresh seen by a stage that is not `plan`. That stage's input —
+// the plan file and the branch — is exactly what the reset discards, so it
+// cannot start over in place. The item goes back to the front of the
+// pipeline instead, with every checkpoint cleared, and the next beat plans
+// it from nothing. `fresh` goes with them: the reset has been applied.
+export const restart = Transition.make({
+  add: [Tags.ready],
+  remove: [
+    Tags.fresh,
+    Tags.wip,
+    Tags.planned,
+    Tags.coded,
+    Tags.reviewed,
+    Tags.review,
+    Tags.failed
+  ]
+})
+
 export const sendToReview = Transition.make({ add: [Tags.review], remove: [Tags.wip] })
 export const fail = Transition.make({
   add: [Tags.failed],

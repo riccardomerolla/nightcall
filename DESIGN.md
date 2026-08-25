@@ -155,7 +155,7 @@ backlog self-triage).
 | `factory:review`     | PR open (`Closes #N`), QA approved     | orchestrator |
 | `factory:failed`     | attempts/budget exhausted; see comment | orchestrator |
 | `factory:budget-N`   | per-issue budget override ($N)         | human only   |
-| `factory:fresh`      | one-shot: discard branch/worktree/plan, restart from origin/HEAD | human only (stripped after reset) |
+| `factory:fresh`      | one-shot: discard branch/worktree/plan and restart. Honoured at EVERY stage — a later stage resets and sends the item back to `factory:ready`, since its input is what the reset discards | human only (stripped after reset) |
 | `factory:planned`    | staged pipeline: plan posted, ready for coder | orchestrator |
 | `factory:coded`      | staged pipeline: implemented, ready for reviewer | orchestrator |
 | `factory:reviewed`   | staged pipeline: reviewed, ready for QA | orchestrator |
