@@ -1,6 +1,11 @@
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import { defaultAzBin, defaultAzureConfig, type AzureConfig } from "./Azure.ts"
+import {
+  defaultAzCommand,
+  defaultAzureConfig,
+  parseCommand,
+  type AzureConfig
+} from "./Azure.ts"
 import { ProjectRef } from "./Hosting.ts"
 
 // Company configuration, decoded once at startup from the environment.
@@ -66,6 +71,14 @@ const positiveOr = (raw: string | undefined, fallback: number): number => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+const azCommandFrom = (
+  raw: string | undefined,
+  platform: string
+): ReadonlyArray<string> => {
+  const parsed = parseCommand(raw ?? "")
+  return parsed.length === 0 ? defaultAzCommand(platform) : parsed
+}
+
 const trimmed = (raw: string | undefined, fallback: string): string => {
   const value = raw?.trim() ?? ""
   return value.length === 0 ? fallback : value
@@ -88,7 +101,7 @@ export const azureFromEnv = (
   }
   return Effect.succeed({
     orgUrl,
-    azBin: trimmed(env["NIGHTCALL_AZ_BIN"], defaultAzBin(platform)),
+    azCommand: azCommandFrom(env["NIGHTCALL_AZ_BIN"], platform),
     workItemType: trimmed(env["NIGHTCALL_ADO_WORK_ITEM_TYPE"], defaultAzureConfig.workItemType),
     targetBranch: trimmed(env["NIGHTCALL_ADO_TARGET_BRANCH"], defaultAzureConfig.targetBranch),
     apiVersion: trimmed(env["NIGHTCALL_ADO_API_VERSION"], defaultAzureConfig.apiVersion)

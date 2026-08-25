@@ -11,7 +11,9 @@ import { makeCollectingFlowEvents } from "@llm4ts/flow/FlowEvents"
 import {
   adoConfigFor,
   branchName,
-  defaultAzBin,
+  batchFileHint,
+  defaultAzCommand,
+  parseCommand,
   cloneUrl,
   commentsArgs,
   createWorkItemArgs,
@@ -44,7 +46,7 @@ import { Tags, signature, signed } from "../src/Protocol.ts"
 
 const azure: AzureConfig = {
   orgUrl: "https://dev.azure.com/acme",
-  azBin: "az",
+  azCommand: ["az"],
   workItemType: "Task",
   targetBranch: "main",
   apiVersion: "7.1-preview.3"
@@ -180,14 +182,37 @@ describe("Azure DevOps executable", () => {
     // PATHEXT extension. On Windows the Azure CLI installs as `az.cmd`, so
     // a bare "az" is simply not on disk and the spawn fails before `az`
     // ever sees the query it was blamed for.
-    assert.strictEqual(defaultAzBin("linux"), "az")
-    assert.strictEqual(defaultAzBin("darwin"), "az")
-    assert.strictEqual(defaultAzBin("win32"), "az.cmd")
+    assert.deepStrictEqual([...defaultAzCommand("linux")], ["az"])
+    assert.deepStrictEqual([...defaultAzCommand("darwin")], ["az"])
+    assert.deepStrictEqual([...defaultAzCommand("win32")], ["az.cmd"])
+  })
+
+  it("reads an override as argv, keeping a quoted path with spaces whole", () => {
+    // The Windows answer is a real executable plus leading arguments, so
+    // the override has to be a command, not just a program name.
+    assert.deepStrictEqual(
+      [...parseCommand('"C:\\Program Files\\Azure\\CLI2\\python.exe" -Im azure.cli')],
+      ["C:\\Program Files\\Azure\\CLI2\\python.exe", "-Im", "azure.cli"]
+    )
+    assert.deepStrictEqual([...parseCommand("az")], ["az"])
+    assert.deepStrictEqual([...parseCommand("   ")], [])
+  })
+
+  it("turns Node's spawn EINVAL into something an operator can act on", () => {
+    // Node refuses to spawn a batch file without a shell and says only
+    // "spawn EINVAL", which names neither the cause nor a way out.
+    const hint = batchFileHint(["az.cmd"], "az.cmd failed: spawn EINVAL")
+    assert.include(hint, "batch file")
+    assert.include(hint, "NIGHTCALL_AZ_BIN")
+    assert.include(hint, "azure.cli")
+    // Not every failure of a batch file is that failure.
+    assert.strictEqual(batchFileHint(["az.cmd"], "command not found"), "")
+    assert.strictEqual(batchFileHint(["az"], "spawn EINVAL"), "")
   })
 
   it.effect("launches the configured executable, not a hardcoded name", () =>
     Effect.gen(function* () {
-      const windows = { ...azure, azBin: "az.cmd" }
+      const windows = { ...azure, azCommand: ["az.cmd"] }
       const fake = yield* makeFakeProcessExecutor({
         responses: new Map([
           [
@@ -217,7 +242,7 @@ describe("Azure DevOps executable", () => {
 
   it.effect("names the executable in the error, so the report matches reality", () =>
     Effect.gen(function* () {
-      const windows = { ...azure, azBin: "az.cmd" }
+      const windows = { ...azure, azCommand: ["az.cmd"] }
       const fake = yield* makeFakeProcessExecutor({
         responses: new Map([
           [

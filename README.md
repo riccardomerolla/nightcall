@@ -108,10 +108,21 @@ Two things differ, and both come from the same fact: **Nightcall never runs
 `az` through a shell.** The executor spawns an argv array directly, so every
 argument reaches `az` exactly as built.
 
-- **The executable is `az.cmd`, not `az`.** A shell-less spawn resolves a
-  command against `PATH` but never appends a `PATHEXT` extension, and the
-  Azure CLI installs on Windows as `az.cmd`. That is the default here;
-  `NIGHTCALL_AZ_BIN` overrides it (a full path, for instance).
+- **The Azure CLI is not an executable on Windows.** It installs as
+  `az.cmd`, a batch file, and Node refuses to spawn `.cmd`/`.bat` without a
+  shell — you get `spawn EINVAL`. (A shell-less spawn also never appends a
+  `PATHEXT` extension, so a bare `az` is not found either.) Point
+  `NIGHTCALL_AZ_BIN` at the interpreter the batch file itself runs:
+
+  ```dosini
+  NIGHTCALL_AZ_BIN="C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe" -Im azure.cli
+  ```
+
+  It is a command, not just a program name — leading arguments are part of
+  it, and a quoted path with spaces stays whole. If your install lives
+  elsewhere, open `wbin\az.cmd` in it: the last line is exactly the
+  interpreter and arguments to copy. Nightcall says this in the error too,
+  rather than leaving `spawn EINVAL` to be decoded.
 - **The `az` command in an error message is a description, not a snippet.**
   A WIQL query contains `<>`, and pasting one into PowerShell asks a shell
   to parse text that was deliberately never given to one — PowerShell reads
