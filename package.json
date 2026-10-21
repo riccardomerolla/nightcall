@@ -13,13 +13,13 @@
     "start": "node --experimental-strip-types src/main.ts"
   },
   "dependencies": {
-    "@llm4ts/core": "0.7.6",
-    "@llm4ts/flow": "0.7.6",
-    "@llm4ts/runner": "0.7.6",
-    "effect": "^4.0.0-beta.102"
+    "@llm4ts/core": "2.45.0",
+    "@llm4ts/flow": "2.45.0",
+    "@llm4ts/runner": "2.45.0",
+    "effect": "4.0.0"
   },
   "devDependencies": {
-    "@effect/vitest": "beta",
+    "@effect/vitest": "4.0.0-beta.102",
     "@types/node": "^22.20.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
