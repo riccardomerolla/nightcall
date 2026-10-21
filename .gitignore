@@ -1,2 +1,4 @@
 node_modules/
 .factory/
+tsconfig.tsbuildinfo
+.llm4ts/*.jsonl
