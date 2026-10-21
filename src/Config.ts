@@ -14,7 +14,7 @@ export class TargetRepo extends Schema.Class<TargetRepo>("TargetRepo")({
   }
 }
 
-export class ConfigError extends Schema.TaggedErrorClass<ConfigError>("nightcall/ConfigError")(
+export class ConfigError extends Schema.TaggedError<ConfigError>("nightcall/ConfigError")(
   "ConfigError",
   {
     message: Schema.String
