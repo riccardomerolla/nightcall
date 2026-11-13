@@ -17,7 +17,7 @@ import { makePlanStore } from "@llm4ts/flow/Persistence"
 import { Plan, Task } from "@llm4ts/flow/Plan"
 import { planFrom } from "@llm4ts/flow/Planner"
 import { lintCommand, minimalReviewers, reviewAndFixLoop } from "@llm4ts/flow/Review"
-import { coderFromEnv, withTurnLimit } from "@llm4ts/runner/Connectors"
+import { withTurnLimit } from "@llm4ts/runner/Connectors"
 import {
   makeFlowRunnerContext,
   nodeFlowRunnerDependencies,
@@ -126,7 +126,7 @@ export const runStage = (
     const runId = `nightcall-${stage}-${intent.issue.number}-${startedAtMs}`
     const store = makePlanStore(nodePlainFileStore)
     const dependencies = nodeFlowRunnerDependencies()
-    const coder = withTurnLimit(companyCoder(environment), turnLimit)
+    const coder = withTurnLimit(yield* companyCoder(environment), turnLimit)
     const options = {
       workDir: worktree,
       workspace: worktree,
@@ -759,7 +759,7 @@ export const runMend = (
       // markers, then continue the rebase — one round per conflicted commit.
       const startedAtMs = yield* Clock.currentTimeMillis
       const coder = withTurnLimit(
-        companyCoder(environment),
+        yield* companyCoder(environment),
         positiveIntOr(environment["NIGHTCALL_TURN_LIMIT"], 50)
       )
       const options = {
@@ -928,4 +928,18 @@ export const runMend = (
       outcome: shipped ? ("Shipped" as const) : ("Advanced" as const),
       costUsd: totalCost(cells)
     }
-  })
+  }).pipe(
+    // companyCoder refuses an unknown LLM4TS_CODER; main checks it at boot,
+    // so this only reports the claim as failed if the environment changed.
+    Effect.catchTag("ScriptUsage", (error) =>
+      Effect.succeed<WorkerReport>({ outcome: "Failed", costUsd: 0 }).pipe(
+        Effect.tap(() =>
+          events.publish(
+            Info.make({
+              message: `mend error for ${intent.target.slug}#${intent.issue.number}: ${error.message}`
+            })
+          )
+        )
+      )
+    )
+  )

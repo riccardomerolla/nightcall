@@ -6,7 +6,7 @@ import type { FlowEventsShape } from "@llm4ts/flow/FlowEvents"
 import { RepoRef, makeGitHubTool, parseIssueRef } from "@llm4ts/flow/GitHubTool"
 import { nodeProcessExecutor } from "@llm4ts/runner/NodeProcessExecutor"
 import { configFromEnv } from "./Config.ts"
-import { runIssue } from "./Engineer.ts"
+import { companyCoder, runIssue } from "./Engineer.ts"
 import { heartbeat, type ClaimIntent, type Stage, type WorkerReport } from "./Heartbeat.ts"
 import { runMend, runStage } from "./Stages.ts"
 import { runEpic } from "./TechLead.ts"
@@ -23,6 +23,8 @@ const loggingEvents: FlowEventsShape = {
 
 const program = Effect.gen(function* () {
   const config = yield* configFromEnv(process.env)
+  // Refuse to start on an unknown LLM4TS_CODER rather than fail every claim.
+  yield* companyCoder(process.env)
   const claimMode = process.env["NIGHTCALL_CLAIM"] === "1"
   const staged = process.env["NIGHTCALL_PIPELINE"] === "staged"
   // Serializes clone/fetch/worktree-add on the shared per-target clone

@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@llm4ts/core':
-        specifier: 2.45.0
-        version: 2.45.0(effect@4.0.0)
+        specifier: 4.0.0
+        version: 4.0.0(effect@4.0.0)
       '@llm4ts/flow':
-        specifier: 2.45.0
-        version: 2.45.0(effect@4.0.0)
+        specifier: 4.0.0
+        version: 4.0.0(effect@4.0.0)
       '@llm4ts/runner':
-        specifier: 2.45.0
-        version: 2.45.0(effect@4.0.0)
+        specifier: 4.0.0
+        version: 4.0.0(effect@4.0.0)
       effect:
         specifier: 4.0.0
         version: 4.0.0
@@ -64,20 +64,20 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@llm4ts/core@2.45.0':
-    resolution: {integrity: sha512-oVoV5g2QcTBDweQVERrZ3+R09CWqw/r831Ql1NbCjgHmguY43tf/moo0SmEwie88pUGYomj2L+z6dOK7+NtfmQ==}
+  '@llm4ts/core@4.0.0':
+    resolution: {integrity: sha512-8NteXySA86GM8eKBtKXkCOPwYqv1tqrItUloy3YBkMIunXXbixkkmeI6+Vk4PKqH2cZQ4iYKJLjlyADqGICn8A==}
     engines: {node: '>=22'}
     peerDependencies:
       effect: 4.0.0
 
-  '@llm4ts/flow@2.45.0':
-    resolution: {integrity: sha512-x2pYTAveYHBSNgx79aKfg5Tj+2BFFkhbdEHpySTqBvPiMdIGEobYFoKd576V/xOMEF3IedUTuKRKDUM35lBw+g==}
+  '@llm4ts/flow@4.0.0':
+    resolution: {integrity: sha512-XqUCjdkEGRr6zeYbJyddU0fM1l+ra4gdfMI3bIVCpI7AK40CffBn/1dutHhjE2YRh2Z/Oy+jrr/SYJlY0wCXPg==}
     engines: {node: '>=22'}
     peerDependencies:
       effect: 4.0.0
 
-  '@llm4ts/runner@2.45.0':
-    resolution: {integrity: sha512-f5LXWaNeaR0ry4NzcxcqJY31t5HiPk5Htm5jRDgGjGAEG8XtA+0IHYXsgw2SXD7XAGwXmBW37ixgjj5uzWgTNg==}
+  '@llm4ts/runner@4.0.0':
+    resolution: {integrity: sha512-28YGJLKEmMf0oBNTpuEfeKidWkmiZuPjVJpwRZYnMJXMN35yxqsZ05Csis3Yw9UwoxPAiJIHjtcjabRiuCvR2w==}
     engines: {node: '>=22'}
     peerDependencies:
       effect: 4.0.0
@@ -346,10 +346,6 @@ packages:
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
-  picomatch@4.0.5:
-    resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
-    engines: {node: '>=12'}
-
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
@@ -521,19 +517,19 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@llm4ts/core@2.45.0(effect@4.0.0)':
+  '@llm4ts/core@4.0.0(effect@4.0.0)':
     dependencies:
       effect: 4.0.0
 
-  '@llm4ts/flow@2.45.0(effect@4.0.0)':
+  '@llm4ts/flow@4.0.0(effect@4.0.0)':
     dependencies:
-      '@llm4ts/core': 2.45.0(effect@4.0.0)
+      '@llm4ts/core': 4.0.0(effect@4.0.0)
       effect: 4.0.0
 
-  '@llm4ts/runner@2.45.0(effect@4.0.0)':
+  '@llm4ts/runner@4.0.0(effect@4.0.0)':
     dependencies:
-      '@llm4ts/core': 2.45.0(effect@4.0.0)
-      '@llm4ts/flow': 2.45.0(effect@4.0.0)
+      '@llm4ts/core': 4.0.0(effect@4.0.0)
+      '@llm4ts/flow': 4.0.0(effect@4.0.0)
       effect: 4.0.0
 
   '@napi-rs/wasm-runtime@1.2.1(@emnapi/core@2.0.0-alpha.3)(@emnapi/runtime@2.0.0-alpha.3)':
@@ -707,8 +703,6 @@ snapshots:
 
   picocolors@1.1.1: {}
 
-  picomatch@4.0.5: {}
-
   picomatch@4.0.7: {}
 
   postcss@8.5.25:
@@ -761,7 +755,7 @@ snapshots:
   vite@8.2.0(@types/node@22.20.1)(yaml@2.9.0):
     dependencies:
       lightningcss: 1.33.0
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       postcss: 8.5.25
       rolldown: 1.2.1
       tinyglobby: 0.2.17

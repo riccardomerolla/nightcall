@@ -17,7 +17,8 @@ import { makePlanStore } from "@llm4ts/flow/Persistence"
 import { Plan } from "@llm4ts/flow/Plan"
 import { planFrom } from "@llm4ts/flow/Planner"
 import { lintCommand } from "@llm4ts/flow/Review"
-import { coderFromEnv, withTurnLimit } from "@llm4ts/runner/Connectors"
+import { coderFromEnvironment, withTurnLimit } from "@llm4ts/runner/Connectors"
+import type { ScriptUsage } from "@llm4ts/runner/FlowArgs"
 import {
   makeFlowRunnerContext,
   nodeFlowRunnerDependencies,
@@ -110,13 +111,13 @@ export const pruneNonCodingTasks = (plan: Plan): Plan => {
 // claude-sonnet-5, or CLI aliases like sonnet/opus).
 export const companyCoder = (
   environment: Readonly<Record<string, string | undefined>>
-): CliConnectorConfig => {
-  const base = coderFromEnv(environment)
-  const model = environment["NIGHTCALL_CODER_MODEL"]?.trim()
-  return model === undefined || model.length === 0
-    ? base
-    : CliConnectorConfig.make({ ...base, model })
-}
+): Effect.Effect<CliConnectorConfig, ScriptUsage> =>
+  Effect.map(coderFromEnvironment(environment), (base) => {
+    const model = environment["NIGHTCALL_CODER_MODEL"]?.trim()
+    return model === undefined || model.length === 0
+      ? base
+      : CliConnectorConfig.make({ ...base, model })
+  })
 
 export const positiveIntOr = (raw: string | undefined, fallback: number): number => {
   const parsed = raw === undefined ? Number.NaN : Number(raw)
@@ -287,7 +288,7 @@ export const runIssue = (
     const maxRounds = positiveIntOr(environment["NIGHTCALL_MAX_ROUNDS"], 1)
     const internalReview = environment["NIGHTCALL_INTERNAL_REVIEW"] !== "off"
     const timeoutMinutes = positiveIntOr(environment["NIGHTCALL_ISSUE_TIMEOUT_MINUTES"], 30)
-    const coder = withTurnLimit(companyCoder(environment), turnLimit)
+    const coder = withTurnLimit(yield* companyCoder(environment), turnLimit)
     const options = {
       workDir: worktree,
       workspace: worktree,

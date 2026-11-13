@@ -79,7 +79,7 @@ export const runEpic = (
     const startedAtMs = yield* Clock.currentTimeMillis
     const runId = `nightcall-epic-${intent.issue.number}-${startedAtMs}`
     const dependencies = nodeFlowRunnerDependencies()
-    const coder = companyCoder(environment)
+    const coder = yield* companyCoder(environment)
     const workDir = process.cwd()
     const options = {
       workDir,
@@ -202,4 +202,18 @@ export const runEpic = (
 
     const cells = yield* Ref.get(cellsRef)
     return { outcome: yield* Ref.get(outcome), costUsd: totalCost(cells) }
-  })
+  }).pipe(
+    // companyCoder refuses an unknown LLM4TS_CODER; main checks it at boot,
+    // so this only reports the claim as failed if the environment changed.
+    Effect.catchTag("ScriptUsage", (error) =>
+      Effect.succeed<WorkerReport>({ outcome: "Failed", costUsd: 0 }).pipe(
+        Effect.tap(() =>
+          events.publish(
+            Info.make({
+              message: `tech lead error for ${intent.target.slug}#${intent.issue.number}: ${error.message}`
+            })
+          )
+        )
+      )
+    )
+  )
